@@ -1,0 +1,596 @@
+{
+  "info": {
+    "name": "RVSK Backend - NestJS Services",
+    "description": "Complete API collection for rvsk-backend NestJS monorepo.\n\nApps:\n- Portal (8091): Auth, Users, RBAC, Grievances, Forms, Gallery, VSK, Home\n- RVSK6A (8083): Attendance Dashboard, Filters\n- Schemes (8082): National Education Schemes KPIs & Dashboards\n\nUsage:\n1. Run 'Login - Super Admin' first to get a token\n2. Token auto-saves to collection variable {{token}}\n3. All authenticated requests use Bearer {{token}}",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "portal_url", "value": "http://localhost:8091" },
+    { "key": "rvsk6a_url", "value": "http://localhost:8083" },
+    { "key": "schemes_url", "value": "http://localhost:8082" },
+    { "key": "token", "value": "" },
+    { "key": "user_id", "value": "" },
+    { "key": "form_id", "value": "" },
+    { "key": "grievance_id", "value": "" },
+    { "key": "module_id", "value": "" },
+    { "key": "page_id", "value": "" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "01 - Authentication",
+      "item": [
+        {
+          "name": "Login - Super Admin",
+          "event": [{ "listen": "test", "script": { "exec": ["var res = pm.response.json();", "if (res.accessToken) { pm.collectionVariables.set('token', res.accessToken); }", "if (res.user && res.user.id) { pm.collectionVariables.set('user_id', res.user.id); }", "pm.test('Login successful', function() { pm.response.to.have.status(200); });"] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"username\": \"superadmin\",\n  \"password\": \"Admin@123\"\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/auth/login", "host": ["{{portal_url}}"], "path": ["api", "v1", "auth", "login"] }
+          }
+        },
+        {
+          "name": "Login - RVSK Admin",
+          "event": [{ "listen": "test", "script": { "exec": ["var res = pm.response.json();", "if (res.accessToken) { pm.collectionVariables.set('token', res.accessToken); }"] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"username\": \"rvskadmin\",\n  \"password\": \"Admin@123\"\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/auth/login", "host": ["{{portal_url}}"], "path": ["api", "v1", "auth", "login"] }
+          }
+        },
+        {
+          "name": "Login - State Admin",
+          "event": [{ "listen": "test", "script": { "exec": ["var res = pm.response.json();", "if (res.accessToken) { pm.collectionVariables.set('token', res.accessToken); }"] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"username\": \"stateadmin_mh\",\n  \"password\": \"Admin@123\"\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/auth/login", "host": ["{{portal_url}}"], "path": ["api", "v1", "auth", "login"] }
+          }
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"paste-refresh-token-here\"\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/auth/refresh", "host": ["{{portal_url}}"], "path": ["api", "v1", "auth", "refresh"] }
+          }
+        },
+        {
+          "name": "Get Current User (me)",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/auth/me", "host": ["{{portal_url}}"], "path": ["api", "v1", "auth", "me"] } }
+        },
+        {
+          "name": "Get Profile",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/auth/profile", "host": ["{{portal_url}}"], "path": ["api", "v1", "auth", "profile"] } }
+        },
+        {
+          "name": "Change Password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"oldPassword\": \"Admin@123\",\n  \"newPassword\": \"NewPass@456\"\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/auth/change-password", "host": ["{{portal_url}}"], "path": ["api", "v1", "auth", "change-password"] }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": { "method": "POST", "url": { "raw": "{{portal_url}}/api/v1/auth/logout", "host": ["{{portal_url}}"], "path": ["api", "v1", "auth", "logout"] } }
+        }
+      ]
+    },
+    {
+      "name": "02 - User Management",
+      "item": [
+        {
+          "name": "List Users",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/users?role=&stateCode=&search=", "host": ["{{portal_url}}"], "path": ["api", "v1", "users"], "query": [{ "key": "role", "value": "" }, { "key": "stateCode", "value": "" }, { "key": "search", "value": "" }] } }
+        },
+        {
+          "name": "Get User by ID",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/users/{{user_id}}", "host": ["{{portal_url}}"], "path": ["api", "v1", "users", "{{user_id}}"] } }
+        },
+        {
+          "name": "Create User",
+          "event": [{ "listen": "test", "script": { "exec": ["var res = pm.response.json();", "if (res.id) { pm.collectionVariables.set('user_id', res.id); }"] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"username\": \"testuser_01\",\n  \"displayName\": \"Test User One\",\n  \"role\": \"State_Admin\",\n  \"stateCode\": \"MH\",\n  \"email\": \"testuser01@rvsk.gov.in\"\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/users/create", "host": ["{{portal_url}}"], "path": ["api", "v1", "users", "create"] }
+          }
+        },
+        {
+          "name": "Update User",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"displayName\": \"Updated Test User\",\n  \"role\": \"Analytics_User\"\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/users/{{user_id}}", "host": ["{{portal_url}}"], "path": ["api", "v1", "users", "{{user_id}}"] }
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": { "method": "PUT", "url": { "raw": "{{portal_url}}/api/v1/users/{{user_id}}/reset-password", "host": ["{{portal_url}}"], "path": ["api", "v1", "users", "{{user_id}}", "reset-password"] } }
+        },
+        {
+          "name": "Unlock Account",
+          "request": { "method": "PUT", "url": { "raw": "{{portal_url}}/api/v1/users/{{user_id}}/unlock", "host": ["{{portal_url}}"], "path": ["api", "v1", "users", "{{user_id}}", "unlock"] } }
+        },
+        {
+          "name": "Toggle Active",
+          "request": { "method": "PUT", "url": { "raw": "{{portal_url}}/api/v1/users/{{user_id}}/toggle-active", "host": ["{{portal_url}}"], "path": ["api", "v1", "users", "{{user_id}}", "toggle-active"] } }
+        },
+        {
+          "name": "Deactivate User",
+          "request": { "method": "PUT", "url": { "raw": "{{portal_url}}/api/v1/users/{{user_id}}/deactivate", "host": ["{{portal_url}}"], "path": ["api", "v1", "users", "{{user_id}}", "deactivate"] } }
+        },
+        {
+          "name": "Delete User (Soft)",
+          "request": { "method": "DELETE", "url": { "raw": "{{portal_url}}/api/v1/users/{{user_id}}", "host": ["{{portal_url}}"], "path": ["api", "v1", "users", "{{user_id}}"] } }
+        }
+      ]
+    },
+    {
+      "name": "03 - RBAC (Modules, Pages, Permissions)",
+      "item": [
+        {
+          "name": "List Modules",
+          "event": [{ "listen": "test", "script": { "exec": ["var res = pm.response.json();", "if (res.length > 0) { pm.collectionVariables.set('module_id', res[0].id); }"] } }],
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/modules?includeInactive=true", "host": ["{{portal_url}}"], "path": ["api", "v1", "modules"], "query": [{ "key": "includeInactive", "value": "true" }] } }
+        },
+        {
+          "name": "Create Module",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"moduleCode\": \"TEST_MODULE\",\n  \"moduleName\": \"Test Module\",\n  \"icon\": \"Science\",\n  \"displayOrder\": 99\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/modules", "host": ["{{portal_url}}"], "path": ["api", "v1", "modules"] }
+          }
+        },
+        {
+          "name": "Update Module",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"moduleName\": \"Updated Module Name\",\n  \"displayOrder\": 10\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/modules/{{module_id}}", "host": ["{{portal_url}}"], "path": ["api", "v1", "modules", "{{module_id}}"] }
+          }
+        },
+        {
+          "name": "Deactivate Module",
+          "request": { "method": "PATCH", "url": { "raw": "{{portal_url}}/api/v1/modules/{{module_id}}/deactivate", "host": ["{{portal_url}}"], "path": ["api", "v1", "modules", "{{module_id}}", "deactivate"] } }
+        },
+        {
+          "name": "Activate Module",
+          "request": { "method": "PATCH", "url": { "raw": "{{portal_url}}/api/v1/modules/{{module_id}}/activate", "host": ["{{portal_url}}"], "path": ["api", "v1", "modules", "{{module_id}}", "activate"] } }
+        },
+        {
+          "name": "List Pages",
+          "event": [{ "listen": "test", "script": { "exec": ["var res = pm.response.json();", "if (res.length > 0) { pm.collectionVariables.set('page_id', res[0].id); }"] } }],
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/pages?includeInactive=true", "host": ["{{portal_url}}"], "path": ["api", "v1", "pages"], "query": [{ "key": "includeInactive", "value": "true" }] } }
+        },
+        {
+          "name": "List Pages by Module",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/pages/by-module/{{module_id}}", "host": ["{{portal_url}}"], "path": ["api", "v1", "pages", "by-module", "{{module_id}}"] } }
+        },
+        {
+          "name": "Create Page",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"moduleId\": \"{{module_id}}\",\n  \"pageCode\": \"TEST_PAGE\",\n  \"pageName\": \"Test Page\",\n  \"routePath\": \"/rvsk/dashboard/test\",\n  \"icon\": \"Science\",\n  \"displayOrder\": 1\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/pages", "host": ["{{portal_url}}"], "path": ["api", "v1", "pages"] }
+          }
+        },
+        {
+          "name": "Update Page",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"pageName\": \"Updated Page Name\",\n  \"displayOrder\": 5\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/pages/{{page_id}}", "host": ["{{portal_url}}"], "path": ["api", "v1", "pages", "{{page_id}}"] }
+          }
+        },
+        {
+          "name": "Get Menu Tree",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/menu/tree", "host": ["{{portal_url}}"], "path": ["api", "v1", "menu", "tree"] } }
+        },
+        {
+          "name": "Get Role Defaults (Super_Admin)",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/permissions/role-defaults/Super_Admin", "host": ["{{portal_url}}"], "path": ["api", "v1", "permissions", "role-defaults", "Super_Admin"] } }
+        },
+        {
+          "name": "Set Role Page Default",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"role\": \"State_Admin\",\n  \"pageId\": \"{{page_id}}\",\n  \"permissions\": {\n    \"canView\": true,\n    \"canEdit\": true,\n    \"canExport\": false,\n    \"canDelete\": false\n  }\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/permissions/role-defaults", "host": ["{{portal_url}}"], "path": ["api", "v1", "permissions", "role-defaults"] }
+          }
+        },
+        {
+          "name": "Get User Overrides",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/permissions/user-overrides/{{user_id}}", "host": ["{{portal_url}}"], "path": ["api", "v1", "permissions", "user-overrides", "{{user_id}}"] } }
+        },
+        {
+          "name": "Get My Access",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/permissions/my-access", "host": ["{{portal_url}}"], "path": ["api", "v1", "permissions", "my-access"] } }
+        }
+      ]
+    },
+    {
+      "name": "04 - Grievance Management",
+      "item": [
+        {
+          "name": "Get Categories (Public)",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/grievances/categories", "host": ["{{portal_url}}"], "path": ["api", "v1", "grievances", "categories"] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "Get Dashboard KPIs",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/grievances/dashboard", "host": ["{{portal_url}}"], "path": ["api", "v1", "grievances", "dashboard"] } }
+        },
+        {
+          "name": "Get Notification Count",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/grievances/notifications/count", "host": ["{{portal_url}}"], "path": ["api", "v1", "grievances", "notifications", "count"] } }
+        },
+        {
+          "name": "Create Grievance",
+          "event": [{ "listen": "test", "script": { "exec": ["var res = pm.response.json();", "if (res.id) { pm.collectionVariables.set('grievance_id', res.id); }"] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"category\": \"INFRASTRUCTURE\",\n  \"subCategory\": \"BUILDING\",\n  \"subject\": \"Test Grievance - Broken classroom roof\",\n  \"description\": \"The classroom roof in Block A is leaking during rain. This needs urgent repair.\"\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/grievances", "host": ["{{portal_url}}"], "path": ["api", "v1", "grievances"] }
+          }
+        },
+        {
+          "name": "List Grievances",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/grievances?page=0&size=20&search=&status=&category=", "host": ["{{portal_url}}"], "path": ["api", "v1", "grievances"], "query": [{ "key": "page", "value": "0" }, { "key": "size", "value": "20" }, { "key": "search", "value": "" }, { "key": "status", "value": "" }, { "key": "category", "value": "" }] } }
+        },
+        {
+          "name": "Get Grievance Detail",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/grievances/{{grievance_id}}", "host": ["{{portal_url}}"], "path": ["api", "v1", "grievances", "{{grievance_id}}"] } }
+        },
+        {
+          "name": "Update Grievance Status",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"newStatus\": \"IN_PROGRESS\",\n  \"comment\": \"Assigning to district team for investigation.\"\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/grievances/{{grievance_id}}/status", "host": ["{{portal_url}}"], "path": ["api", "v1", "grievances", "{{grievance_id}}", "status"] }
+          }
+        },
+        {
+          "name": "Add Response to Grievance",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"responseText\": \"We have dispatched a repair team. Expected completion within 5 business days.\"\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/grievances/{{grievance_id}}/responses", "host": ["{{portal_url}}"], "path": ["api", "v1", "grievances", "{{grievance_id}}", "responses"] }
+          }
+        },
+        {
+          "name": "Add Internal Note",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"note\": \"District admin confirmed budget allocation for this repair.\"\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/grievances/{{grievance_id}}/notes", "host": ["{{portal_url}}"], "path": ["api", "v1", "grievances", "{{grievance_id}}", "notes"] }
+          }
+        },
+        {
+          "name": "Close Grievance",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"comment\": \"Issue resolved. Roof repaired.\"\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/grievances/{{grievance_id}}/close", "host": ["{{portal_url}}"], "path": ["api", "v1", "grievances", "{{grievance_id}}", "close"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "05 - Form Builder",
+      "item": [
+        {
+          "name": "Create Form",
+          "event": [{ "listen": "test", "script": { "exec": ["var res = pm.response.json();", "if (res.id) { pm.collectionVariables.set('form_id', res.id); }"] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"title\": \"School Infrastructure Survey 2025\",\n  \"description\": \"Annual infrastructure audit form for all state schools\",\n  \"category\": \"INFRASTRUCTURE\"\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/forms", "host": ["{{portal_url}}"], "path": ["api", "v1", "forms"] }
+          }
+        },
+        {
+          "name": "List Forms",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/forms?status=&search=&page=0&size=20", "host": ["{{portal_url}}"], "path": ["api", "v1", "forms"], "query": [{ "key": "status", "value": "" }, { "key": "search", "value": "" }, { "key": "page", "value": "0" }, { "key": "size", "value": "20" }] } }
+        },
+        {
+          "name": "Get Form by ID",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/forms/{{form_id}}", "host": ["{{portal_url}}"], "path": ["api", "v1", "forms", "{{form_id}}"] } }
+        },
+        {
+          "name": "Add Question to Form",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"questionText\": \"How many classrooms have proper ventilation?\",\n  \"questionType\": \"NUMBER\",\n  \"isRequired\": true,\n  \"displayOrder\": 1\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/forms/{{form_id}}/questions", "host": ["{{portal_url}}"], "path": ["api", "v1", "forms", "{{form_id}}", "questions"] }
+          }
+        },
+        {
+          "name": "Get Questions",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/forms/{{form_id}}/questions", "host": ["{{portal_url}}"], "path": ["api", "v1", "forms", "{{form_id}}", "questions"] } }
+        },
+        {
+          "name": "Publish Form",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"targetStates\": [\"MH\", \"KA\", \"TN\"],\n  \"deadline\": \"2025-12-31\"\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/forms/{{form_id}}/publish", "host": ["{{portal_url}}"], "path": ["api", "v1", "forms", "{{form_id}}", "publish"] }
+          }
+        },
+        {
+          "name": "Submit Response",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"answers\": [\n    { \"questionId\": \"q1-uuid\", \"value\": \"15\" }\n  ]\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/forms/{{form_id}}/responses", "host": ["{{portal_url}}"], "path": ["api", "v1", "forms", "{{form_id}}", "responses"] }
+          }
+        },
+        {
+          "name": "Get Responses",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/forms/{{form_id}}/responses?page=0&size=20", "host": ["{{portal_url}}"], "path": ["api", "v1", "forms", "{{form_id}}", "responses"], "query": [{ "key": "page", "value": "0" }, { "key": "size", "value": "20" }] } }
+        },
+        {
+          "name": "Get My Response",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/forms/{{form_id}}/my-response", "host": ["{{portal_url}}"], "path": ["api", "v1", "forms", "{{form_id}}", "my-response"] } }
+        },
+        {
+          "name": "Close Form",
+          "request": { "method": "POST", "url": { "raw": "{{portal_url}}/api/v1/forms/{{form_id}}/close", "host": ["{{portal_url}}"], "path": ["api", "v1", "forms", "{{form_id}}", "close"] } }
+        }
+      ]
+    },
+    {
+      "name": "06 - Attendance (RVSK6A - Port 8083)",
+      "item": [
+        {
+          "name": "Integration Coverage",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/integration-coverage", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "integration-coverage"] } }
+        },
+        {
+          "name": "Summary (Today)",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/summary?date=2025-01-15", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "summary"], "query": [{ "key": "date", "value": "2025-01-15" }] } }
+        },
+        {
+          "name": "Summary (State Filter)",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/summary?date=2025-01-15&stateId=27", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "summary"], "query": [{ "key": "date", "value": "2025-01-15" }, { "key": "stateId", "value": "27" }] } }
+        },
+        {
+          "name": "State Table",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/state-table?date=2025-01-15", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "state-table"], "query": [{ "key": "date", "value": "2025-01-15" }] } }
+        },
+        {
+          "name": "Regional Leaders",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/regional-leaders?date=2025-01-15", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "regional-leaders"], "query": [{ "key": "date", "value": "2025-01-15" }] } }
+        },
+        {
+          "name": "Trends (30 Days)",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/trends?days=30", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "trends"], "query": [{ "key": "days", "value": "30" }] } }
+        },
+        {
+          "name": "Trends (Date Range)",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/trends?startDate=2025-01-01&endDate=2025-01-31", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "trends"], "query": [{ "key": "startDate", "value": "2025-01-01" }, { "key": "endDate", "value": "2025-01-31" }] } }
+        },
+        {
+          "name": "Monthly Aggregation",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/monthly?year=2025", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "monthly"], "query": [{ "key": "year", "value": "2025" }] } }
+        },
+        {
+          "name": "Detailed Data (Paginated)",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/detailed?date=2025-01-15&page=1&size=20", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "detailed"], "query": [{ "key": "date", "value": "2025-01-15" }, { "key": "page", "value": "1" }, { "key": "size", "value": "20" }] } }
+        },
+        {
+          "name": "Teachers Dashboard",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/teachers/dashboard?date=2025-01-15", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "teachers", "dashboard"], "query": [{ "key": "date", "value": "2025-01-15" }] } }
+        },
+        {
+          "name": "Students Dashboard",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/students/dashboard?date=2025-01-15", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "students", "dashboard"], "query": [{ "key": "date", "value": "2025-01-15" }] } }
+        },
+        {
+          "name": "School Management Report",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/report/school-management?date=2025-01-15", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "report", "school-management"], "query": [{ "key": "date", "value": "2025-01-15" }] } }
+        },
+        {
+          "name": "Schools List (with Attendance)",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/schools?date=2025-01-15&page=1&size=10", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "schools"], "query": [{ "key": "date", "value": "2025-01-15" }, { "key": "page", "value": "1" }, { "key": "size", "value": "10" }] } }
+        },
+        {
+          "name": "Filter - States",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/filters/states", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "filters", "states"] } }
+        },
+        {
+          "name": "Filter - Districts (by State)",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/filters/districts?stateId=27", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "filters", "districts"], "query": [{ "key": "stateId", "value": "27" }] } }
+        },
+        {
+          "name": "Filter - Blocks (by District)",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/filters/blocks?districtId=2701", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "filters", "blocks"], "query": [{ "key": "districtId", "value": "2701" }] } }
+        },
+        {
+          "name": "Filter - Clusters (by Block)",
+          "request": { "method": "GET", "url": { "raw": "{{rvsk6a_url}}/api/v1/attendance/filters/clusters?blockId=270101", "host": ["{{rvsk6a_url}}"], "path": ["api", "v1", "attendance", "filters", "clusters"], "query": [{ "key": "blockId", "value": "270101" }] } }
+        }
+      ]
+    },
+    {
+      "name": "07 - Schemes (Port 8082)",
+      "item": [
+        {
+          "name": "PM SHRI - KPIs",
+          "request": { "method": "GET", "url": { "raw": "{{schemes_url}}/api/v1/schemes/PM_SHRI/kpis", "host": ["{{schemes_url}}"], "path": ["api", "v1", "schemes", "PM_SHRI", "kpis"] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "PM SHRI - Statewise",
+          "request": { "method": "GET", "url": { "raw": "{{schemes_url}}/api/v1/schemes/PM_SHRI/statewise", "host": ["{{schemes_url}}"], "path": ["api", "v1", "schemes", "PM_SHRI", "statewise"] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "PM SHRI - Filters",
+          "request": { "method": "GET", "url": { "raw": "{{schemes_url}}/api/v1/schemes/PM_SHRI/filters", "host": ["{{schemes_url}}"], "path": ["api", "v1", "schemes", "PM_SHRI", "filters"] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "NAS - KPIs",
+          "request": { "method": "GET", "url": { "raw": "{{schemes_url}}/api/v1/schemes/NAS/kpis", "host": ["{{schemes_url}}"], "path": ["api", "v1", "schemes", "NAS", "kpis"] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "NAS - Statewise",
+          "request": { "method": "GET", "url": { "raw": "{{schemes_url}}/api/v1/schemes/NAS/statewise", "host": ["{{schemes_url}}"], "path": ["api", "v1", "schemes", "NAS", "statewise"] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "PGI - KPIs",
+          "request": { "method": "GET", "url": { "raw": "{{schemes_url}}/api/v1/schemes/PGI/kpis", "host": ["{{schemes_url}}"], "path": ["api", "v1", "schemes", "PGI", "kpis"] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "NISHTHA - KPIs",
+          "request": { "method": "GET", "url": { "raw": "{{schemes_url}}/api/v1/schemes/NISHTHA/kpis", "host": ["{{schemes_url}}"], "path": ["api", "v1", "schemes", "NISHTHA", "kpis"] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "NISHTHA - Charts",
+          "request": { "method": "GET", "url": { "raw": "{{schemes_url}}/api/v1/schemes/NISHTHA/charts", "host": ["{{schemes_url}}"], "path": ["api", "v1", "schemes", "NISHTHA", "charts"] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "DIKSHA_ETB - KPIs",
+          "request": { "method": "GET", "url": { "raw": "{{schemes_url}}/api/v1/schemes/DIKSHA_ETB/kpis", "host": ["{{schemes_url}}"], "path": ["api", "v1", "schemes", "DIKSHA_ETB", "kpis"] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "PM_POSHAN - KPIs",
+          "request": { "method": "GET", "url": { "raw": "{{schemes_url}}/api/v1/schemes/PM_POSHAN/kpis", "host": ["{{schemes_url}}"], "path": ["api", "v1", "schemes", "PM_POSHAN", "kpis"] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "MICRO_IMPROVEMENT - KPIs",
+          "request": { "method": "GET", "url": { "raw": "{{schemes_url}}/api/v1/schemes/MICRO_IMPROVEMENT/kpis", "host": ["{{schemes_url}}"], "path": ["api", "v1", "schemes", "MICRO_IMPROVEMENT", "kpis"] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "UDISE_PLUS - KPIs",
+          "request": { "method": "GET", "url": { "raw": "{{schemes_url}}/api/v1/schemes/UDISE_PLUS/kpis", "host": ["{{schemes_url}}"], "path": ["api", "v1", "schemes", "UDISE_PLUS", "kpis"] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "Any Scheme - Summary",
+          "request": { "method": "GET", "url": { "raw": "{{schemes_url}}/api/v1/schemes/PM_SHRI/summary?stateName=Maharashtra", "host": ["{{schemes_url}}"], "path": ["api", "v1", "schemes", "PM_SHRI", "summary"], "query": [{ "key": "stateName", "value": "Maharashtra" }] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "Any Scheme - Districtwise",
+          "request": { "method": "GET", "url": { "raw": "{{schemes_url}}/api/v1/schemes/PM_SHRI/districtwise?stateName=Maharashtra", "host": ["{{schemes_url}}"], "path": ["api", "v1", "schemes", "PM_SHRI", "districtwise"], "query": [{ "key": "stateName", "value": "Maharashtra" }] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "Any Scheme - Map Data",
+          "request": { "method": "GET", "url": { "raw": "{{schemes_url}}/api/v1/schemes/PM_SHRI/map", "host": ["{{schemes_url}}"], "path": ["api", "v1", "schemes", "PM_SHRI", "map"] }, "auth": { "type": "noauth" } }
+        }
+      ]
+    },
+    {
+      "name": "08 - VSK (State Profile)",
+      "item": [
+        {
+          "name": "Get VSK Profile",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/vsk/profile", "host": ["{{portal_url}}"], "path": ["api", "v1", "vsk", "profile"] } }
+        },
+        {
+          "name": "Save VSK Profile",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"vskName\": \"Maharashtra Vidyarthi Sahayyak Kendra\",\n  \"establishedDate\": \"2023-04-01\",\n  \"address\": \"SCERT Building, Pune\"\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/vsk/profile", "host": ["{{portal_url}}"], "path": ["api", "v1", "vsk", "profile"] }
+          }
+        },
+        {
+          "name": "Get Officers",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/vsk/officers", "host": ["{{portal_url}}"], "path": ["api", "v1", "vsk", "officers"] } }
+        },
+        {
+          "name": "Get Committee Members",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/vsk/committee-members", "host": ["{{portal_url}}"], "path": ["api", "v1", "vsk", "committee-members"] } }
+        },
+        {
+          "name": "Get PMU",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/vsk/pmu", "host": ["{{portal_url}}"], "path": ["api", "v1", "vsk", "pmu"] } }
+        },
+        {
+          "name": "Get Software",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/vsk/software", "host": ["{{portal_url}}"], "path": ["api", "v1", "vsk", "software"] } }
+        },
+        {
+          "name": "Get Infra",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/vsk/infra", "host": ["{{portal_url}}"], "path": ["api", "v1", "vsk", "infra"] } }
+        },
+        {
+          "name": "Get Review Summary",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/vsk/review-summary", "host": ["{{portal_url}}"], "path": ["api", "v1", "vsk", "review-summary"] } }
+        },
+        {
+          "name": "Get Full Details",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/vsk/details", "host": ["{{portal_url}}"], "path": ["api", "v1", "vsk", "details"] } }
+        },
+        {
+          "name": "Auto-Save (Step 1)",
+          "request": {
+            "method": "PUT",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"step\": 1,\n  \"data\": {\n    \"vskName\": \"Test VSK\",\n    \"establishedDate\": \"2024-01-01\"\n  }\n}" },
+            "url": { "raw": "{{portal_url}}/api/v1/vsk/auto-save", "host": ["{{portal_url}}"], "path": ["api", "v1", "vsk", "auto-save"] }
+          }
+        },
+        {
+          "name": "Submit VSK Profile",
+          "request": { "method": "POST", "url": { "raw": "{{portal_url}}/api/v1/vsk/submit", "host": ["{{portal_url}}"], "path": ["api", "v1", "vsk", "submit"] } }
+        },
+        {
+          "name": "Admin - Dashboard",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/vsk/admin/dashboard", "host": ["{{portal_url}}"], "path": ["api", "v1", "vsk", "admin", "dashboard"] } }
+        },
+        {
+          "name": "Admin - List States",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/vsk/admin/states?page=0&size=20", "host": ["{{portal_url}}"], "path": ["api", "v1", "vsk", "admin", "states"], "query": [{ "key": "page", "value": "0" }, { "key": "size", "value": "20" }] } }
+        }
+      ]
+    },
+    {
+      "name": "09 - Gallery & Home",
+      "item": [
+        {
+          "name": "Get Home Data",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/home", "host": ["{{portal_url}}"], "path": ["api", "v1", "home"] } }
+        },
+        {
+          "name": "Get Home (Super Admin)",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/home/super-admin", "host": ["{{portal_url}}"], "path": ["api", "v1", "home", "super-admin"] } }
+        },
+        {
+          "name": "List Gallery Images (Public)",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/gallery", "host": ["{{portal_url}}"], "path": ["api", "v1", "gallery"] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "List Gallery Images by State",
+          "request": { "method": "GET", "url": { "raw": "{{portal_url}}/api/v1/gallery?stateCode=MH", "host": ["{{portal_url}}"], "path": ["api", "v1", "gallery"], "query": [{ "key": "stateCode", "value": "MH" }] }, "auth": { "type": "noauth" } }
+        },
+        {
+          "name": "Delete Gallery Image",
+          "request": { "method": "DELETE", "url": { "raw": "{{portal_url}}/api/v1/gallery/image-uuid-here", "host": ["{{portal_url}}"], "path": ["api", "v1", "gallery", "image-uuid-here"] } }
+        }
+      ]
+    }
+  ]
+}
