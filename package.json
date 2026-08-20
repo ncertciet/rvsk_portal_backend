@@ -19,7 +19,12 @@
     "test:cov": "jest --coverage",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "lint": "eslint \"{apps,libs}/**/*.ts\" --fix",
-    "format": "prettier --write \"apps/**/*.ts\" \"libs/**/*.ts\""
+    "format": "prettier --write \"apps/**/*.ts\" \"libs/**/*.ts\"",
+    "typeorm": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js -d apps/portal/src/typeorm.datasource.ts",
+    "migration:run": "npm run typeorm -- migration:run",
+    "migration:revert": "npm run typeorm -- migration:revert",
+    "migration:generate": "npm run typeorm -- migration:generate apps/portal/src/migrations/AutoMigration",
+    "migration:create": "npm run typeorm -- migration:create apps/portal/src/migrations/ManualMigration"
   },
   "dependencies": {
     "@nestjs/axios": "^3.1.3",
@@ -68,6 +73,7 @@
     "@types/uuid": "^9.0.0",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
     "@typescript-eslint/parser": "^6.0.0",
+    "dotenv": "^16.6.1",
     "eslint": "^8.0.0",
     "eslint-config-prettier": "^9.0.0",
     "eslint-plugin-prettier": "^5.0.0",
