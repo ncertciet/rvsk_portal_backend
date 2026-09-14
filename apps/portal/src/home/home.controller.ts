@@ -3,7 +3,7 @@ import { CurrentUser, AuthenticatedUser } from '@rvsk/common';
 
 import { HomeService, HomeData } from './home.service';
 
-@Controller('api/v1/home')
+@Controller('home')
 export class HomeController {
   constructor(private readonly homeService: HomeService) {}
 

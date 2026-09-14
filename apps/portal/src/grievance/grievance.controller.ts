@@ -26,7 +26,7 @@ import { GrievanceCategoryService } from '../categories/category.service';
 import { GrievanceFileService } from '../grievance-attachments/file.service';
 import { CreateGrievanceDto, UpdateStatusDto, AddResponseDto } from './dto';
 
-@Controller('api/v1/grievances')
+@Controller('grievances')
 export class GrievanceController {
   constructor(
     private readonly grievanceService: GrievanceService,

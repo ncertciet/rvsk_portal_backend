@@ -2,7 +2,7 @@ import { Controller, Get, Param, Query } from '@nestjs/common';
 import { SchemesService } from './schemes.service';
 import { Public } from '@rvsk/common';
 
-@Controller('api/v1/schemes')
+@Controller('schemes')
 export class SchemesController {
   constructor(private readonly schemesService: SchemesService) {}
 

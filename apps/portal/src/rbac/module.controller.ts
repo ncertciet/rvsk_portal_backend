@@ -36,7 +36,7 @@ class UpdateModuleDto {
  * All endpoints require Super_Admin or RVSK_Admin role.
  */
 @Roles('Super_Admin', 'RVSK_Admin')
-@Controller('api/v1/modules')
+@Controller('modules')
 export class ModuleController {
   constructor(
     @InjectRepository(ModuleMaster)

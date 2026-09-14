@@ -3,7 +3,7 @@ import { Response } from 'express';
 import { ReportsService } from './reports.service';
 import { Public } from '@rvsk/common';
 
-@Controller('api/v1/reports')
+@Controller('reports')
 export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}
 

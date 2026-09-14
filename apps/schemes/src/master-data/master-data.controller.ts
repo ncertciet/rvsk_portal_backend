@@ -2,7 +2,7 @@ import { Controller, Get, Param } from '@nestjs/common';
 import { MasterDataService } from './master-data.service';
 import { Public } from '@rvsk/common';
 
-@Controller('api/v1/master')
+@Controller('master')
 export class MasterDataController {
   constructor(private readonly masterDataService: MasterDataService) {}
 

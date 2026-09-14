@@ -20,7 +20,7 @@ import {
   EffectivePermission,
 } from './interfaces';
 
-@Controller('api/v1/permissions')
+@Controller('permissions')
 export class PermissionController {
   constructor(
     private readonly permissionService: PermissionServiceV2,

@@ -19,7 +19,7 @@ import { Roles, CurrentUser, AuthenticatedUser, Public } from '@rvsk/common';
 import { GalleryService } from './gallery.service';
 import { GalleryImage } from './gallery.entity';
 
-@Controller('api/v1/gallery')
+@Controller('gallery')
 export class GalleryController {
   constructor(private readonly galleryService: GalleryService) {}
 

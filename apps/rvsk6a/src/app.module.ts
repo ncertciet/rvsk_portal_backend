@@ -6,8 +6,10 @@ import { CommonModule, createOracleDataSource } from '@rvsk/common';
 import { AttendanceModule } from './attendance/attendance.module';
 import { AccreditationModule } from './accreditation/accreditation.module';
 import { FiltersModule } from './filters/filters.module';
+import { HealthController } from './health.controller';
 
 @Module({
+  controllers: [HealthController],
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,

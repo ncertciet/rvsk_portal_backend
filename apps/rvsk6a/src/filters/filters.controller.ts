@@ -1,7 +1,7 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { FiltersService } from './filters.service';
 
-@Controller('api/v1/attendance/filters')
+@Controller('attendance/filters')
 export class FiltersController {
   constructor(private readonly filtersService: FiltersService) {}
 

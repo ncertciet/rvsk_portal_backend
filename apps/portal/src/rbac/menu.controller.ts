@@ -2,7 +2,7 @@ import { Controller, Get } from '@nestjs/common';
 import { CurrentUser, AuthenticatedUser } from '@rvsk/common';
 import { MenuService, MenuNode } from './menu.service';
 
-@Controller('api/v1/menu')
+@Controller('menu')
 export class MenuController {
   constructor(private readonly menuService: MenuService) {}
 

@@ -27,7 +27,7 @@ import { QuestionDto } from '../questions/dto/question.dto';
 import { ReorderQuestionsDto } from '../questions/dto/reorder-questions.dto';
 import { SubmitResponseDto } from '../responses/dto/submit-response.dto';
 
-@Controller('api/v1/forms')
+@Controller('forms')
 export class FormsController {
   constructor(
     private readonly formService: FormService,

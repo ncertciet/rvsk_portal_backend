@@ -39,7 +39,7 @@ class UpdatePageDto {
  * All endpoints require Super_Admin or RVSK_Admin role.
  */
 @Roles('Super_Admin', 'RVSK_Admin')
-@Controller('api/v1/pages')
+@Controller('pages')
 export class PageController {
   constructor(
     @InjectRepository(PageMaster)

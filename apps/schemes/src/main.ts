@@ -1,10 +1,16 @@
 import { NestFactory, Reflector } from '@nestjs/core';
 import { ClassSerializerInterceptor, ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const apiPrefix = app.get(ConfigService).get<string>('API_PREFIX')?.trim();
+  if (!apiPrefix) {
+    throw new Error('Missing required configuration: API_PREFIX');
+  }
+  app.setGlobalPrefix(apiPrefix);
 
   // Security middleware
   app.use(helmet());

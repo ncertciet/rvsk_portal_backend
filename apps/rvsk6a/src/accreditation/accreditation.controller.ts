@@ -4,7 +4,7 @@ import { AccreditationService } from './accreditation.service';
 import { DashboardFiltersDto } from './dto/dashboard-filters.dto';
 import { AccreditationExceptionFilter } from './filters/accreditation-exception.filter';
 
-@Controller('api/v1/accreditation/dashboard')
+@Controller('accreditation/dashboard')
 @UseFilters(AccreditationExceptionFilter)
 export class AccreditationController {
   constructor(private readonly service: AccreditationService) {}

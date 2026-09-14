@@ -23,7 +23,7 @@ import { VskPmuDto } from './dto/vsk-pmu.dto';
 import { VskSoftwareDto } from './dto/vsk-software.dto';
 import { VskInfraDto } from './dto/vsk-infra.dto';
 
-@Controller('api/v1/vsk')
+@Controller('vsk')
 export class VskController {
   constructor(private readonly vskService: VskService) {}
 
