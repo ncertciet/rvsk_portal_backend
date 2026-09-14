@@ -107,8 +107,11 @@ export class AccreditationService {
     private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
   ) {
-    // Configurable via ACCR_SCHEMA in .env.local; falls back to the ADW schema.
-    this.accrSchema = this.configService.get<string>('ACCR_SCHEMA', 'RTIWARI');
+    const schema = this.configService.get<string>('ACCR_SCHEMA')?.trim();
+    if (!schema) {
+      throw new Error('Missing required configuration: ACCR_SCHEMA');
+    }
+    this.accrSchema = schema;
   }
 
   /**

@@ -11,7 +11,11 @@ export class MasterDataService {
     private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
   ) {
-    this.schema = this.configService.get<string>('RTIWARI_SCHEMA', 'RTIWARI');
+    const schema = this.configService.get<string>('ADW_SCHEMA')?.trim();
+    if (!schema) {
+      throw new Error('Missing required configuration: ADW_SCHEMA');
+    }
+    this.schema = schema;
   }
 
   async getAllStates() {

@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { CommonModule, createOracleDataSource } from '@rvsk/common';
 
 import { AttendanceModule } from './attendance/attendance.module';
+import { AccreditationModule } from './accreditation/accreditation.module';
 import { FiltersModule } from './filters/filters.module';
 
 @Module({
@@ -22,6 +23,7 @@ import { FiltersModule } from './filters/filters.module';
     CommonModule,
     AttendanceModule,
     FiltersModule,
+    AccreditationModule,
   ],
 })
 export class AppModule {}
