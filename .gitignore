@@ -39,8 +39,14 @@ lerna-debug.log*
 .env
 .env.production
 
+# Kiro Specifications
+/.kiro
+.kiro/
+
 # Upload directory
 /uploads
 
 # Oracle Wallet (sensitive)
 /wallet
+
+
