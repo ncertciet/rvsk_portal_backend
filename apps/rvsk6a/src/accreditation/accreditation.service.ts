@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
+import { AppException } from '@rvsk/common';
 import { DashboardFiltersDto } from './dto/dashboard-filters.dto';
 import {
   KpiEnvelope,
@@ -107,11 +108,8 @@ export class AccreditationService {
     private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
   ) {
-    const schema = this.configService.get<string>('ACCR_SCHEMA')?.trim();
-    if (!schema) {
-      throw new Error('Missing required configuration: ACCR_SCHEMA');
-    }
-    this.accrSchema = schema;
+    // Configurable via ACCR_SCHEMA in .env.local; falls back to the ADW schema.
+    this.accrSchema = this.configService.get<string>('ACCR_SCHEMA', 'RTIWARI');
   }
 
   /**
@@ -131,7 +129,10 @@ export class AccreditationService {
        FETCH FIRST 1 ROWS ONLY`,
     );
     if (result.length === 0) {
-      throw new Error(`No academic year data found in ${this.accrSchema} dashboard views`);
+      throw new AppException(
+        'ACCR_NO_DATA',
+        `No academic year data found in ${this.accrSchema} dashboard views`,
+      );
     }
     return result[0].academic_year ?? result[0].ACADEMIC_YEAR;
   }
@@ -852,9 +853,7 @@ export class AccreditationService {
   ): Promise<KpiEnvelope<any>> {
     // Validate input is an integer and within a reasonable range
     if (!Number.isInteger(kpiNo) || kpiNo < 1 || kpiNo > 20) {
-      throw new BadRequestException(
-        `Invalid KPI number: ${kpiNo}. Must be an integer between 1 and 20.`,
-      );
+      throw new AppException('ACCR_INVALID_KPI', `Received kpiNo=${kpiNo}`);
     }
 
     // KPI section routing map
@@ -880,7 +879,7 @@ export class AccreditationService {
 
     // KPIs 18, 19, 20 are not available
     if (!(kpiNo in KPI_SECTION_MAP)) {
-      throw new NotFoundException(`KPI ${kpiNo} is not available`);
+      throw new AppException('ACCR_KPI_NOT_AVAILABLE', `KPI ${kpiNo} is not available`);
     }
 
     const { section, responseKey } = KPI_SECTION_MAP[kpiNo];
@@ -907,7 +906,7 @@ export class AccreditationService {
         sectionResponse = await this.getImpactOutcomes(filters);
         break;
       default:
-        throw new NotFoundException(`KPI ${kpiNo} is not available`);
+        throw new AppException('ACCR_KPI_NOT_AVAILABLE', `KPI ${kpiNo} is not available`);
     }
 
     // Extract only the specific KPI data from the section response

@@ -44,7 +44,7 @@ describe('GlobalExceptionFilter', () => {
     expect(responseBody.timestamp).toBeDefined();
   });
 
-  it('should handle HttpException with INTERNAL_ERROR errorCode', () => {
+  it('should derive errorCode from HTTP status for built-in HttpExceptions (4xx surfaces its message)', () => {
     const exception = new HttpException('Forbidden resource', HttpStatus.FORBIDDEN);
 
     filter.catch(exception, mockHost as any);
@@ -52,12 +52,26 @@ describe('GlobalExceptionFilter', () => {
     expect(mockResponse.status).toHaveBeenCalledWith(HttpStatus.FORBIDDEN);
     const responseBody: ErrorResponse = mockResponse.json.mock.calls[0][0];
     expect(responseBody.status).toBe(HttpStatus.FORBIDDEN);
-    expect(responseBody.errorCode).toBe('INTERNAL_ERROR');
+    expect(responseBody.errorCode).toBe('AUTH_FORBIDDEN');
+    // 4xx framework messages are still surfaced
     expect(responseBody.message).toBe('Forbidden resource');
   });
 
-  it('should handle unknown exceptions with 500 and generic message', () => {
-    const exception = new Error('Something went wrong');
+  it('should mask 5xx HttpException messages with a generic message', () => {
+    const exception = new HttpException('DB pool exhausted', HttpStatus.INTERNAL_SERVER_ERROR);
+
+    filter.catch(exception, mockHost as any);
+
+    expect(mockResponse.status).toHaveBeenCalledWith(HttpStatus.INTERNAL_SERVER_ERROR);
+    const responseBody: ErrorResponse = mockResponse.json.mock.calls[0][0];
+    expect(responseBody.errorCode).toBe('INTERNAL_ERROR');
+    // Real detail is NOT leaked to the client
+    expect(responseBody.message).not.toContain('DB pool exhausted');
+    expect(responseBody.message).toBe('An unexpected error occurred. Please try again.');
+  });
+
+  it('should handle unknown exceptions with 500 and a generic (non-leaking) message', () => {
+    const exception = new Error('ORA-00942: table does not exist');
 
     filter.catch(exception, mockHost as any);
 
@@ -65,7 +79,9 @@ describe('GlobalExceptionFilter', () => {
     const responseBody: ErrorResponse = mockResponse.json.mock.calls[0][0];
     expect(responseBody.status).toBe(HttpStatus.INTERNAL_SERVER_ERROR);
     expect(responseBody.errorCode).toBe('INTERNAL_ERROR');
-    expect(responseBody.message).toBe('An unexpected error occurred');
+    // The raw internal error must NOT reach the client
+    expect(responseBody.message).not.toContain('ORA-00942');
+    expect(responseBody.message).toBe('An unexpected error occurred. Please try again.');
   });
 
   it('should use x-correlation-id header as traceId when present', () => {

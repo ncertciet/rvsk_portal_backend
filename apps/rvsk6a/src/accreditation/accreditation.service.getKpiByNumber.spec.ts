@@ -1,4 +1,4 @@
-import { NotFoundException, BadRequestException } from '@nestjs/common';
+import { AppException } from '@rvsk/common';
 import { AccreditationService } from './accreditation.service';
 
 /**
@@ -238,63 +238,60 @@ describe('AccreditationService - getKpiByNumber()', () => {
   });
 
   describe('HTTP 404 for KPI 18/19/20', () => {
-    it('should throw NotFoundException for KPI 18', async () => {
+    it('should throw AppException (ACCR_KPI_NOT_AVAILABLE) for KPI 18', async () => {
       await expect(service.getKpiByNumber(18, { stateCode: 'ALL' })).rejects.toThrow(
-        NotFoundException,
+        AppException,
       );
-      await expect(service.getKpiByNumber(18, { stateCode: 'ALL' })).rejects.toThrow(
-        'KPI 18 is not available',
-      );
+      await expect(service.getKpiByNumber(18, { stateCode: 'ALL' })).rejects.toMatchObject({
+        errorCode: 'ACCR_KPI_NOT_AVAILABLE',
+        httpStatus: 404,
+      });
     });
 
-    it('should throw NotFoundException for KPI 19', async () => {
+    it('should throw AppException (ACCR_KPI_NOT_AVAILABLE) for KPI 19', async () => {
       await expect(service.getKpiByNumber(19, { stateCode: 'ALL' })).rejects.toThrow(
-        NotFoundException,
+        AppException,
       );
-      await expect(service.getKpiByNumber(19, { stateCode: 'ALL' })).rejects.toThrow(
-        'KPI 19 is not available',
-      );
+      await expect(service.getKpiByNumber(19, { stateCode: 'ALL' })).rejects.toMatchObject({
+        errorCode: 'ACCR_KPI_NOT_AVAILABLE',
+        httpStatus: 404,
+      });
     });
 
-    it('should throw NotFoundException for KPI 20', async () => {
+    it('should throw AppException (ACCR_KPI_NOT_AVAILABLE) for KPI 20', async () => {
       await expect(service.getKpiByNumber(20, { stateCode: 'ALL' })).rejects.toThrow(
-        NotFoundException,
+        AppException,
       );
-      await expect(service.getKpiByNumber(20, { stateCode: 'ALL' })).rejects.toThrow(
-        'KPI 20 is not available',
-      );
+      await expect(service.getKpiByNumber(20, { stateCode: 'ALL' })).rejects.toMatchObject({
+        errorCode: 'ACCR_KPI_NOT_AVAILABLE',
+        httpStatus: 404,
+      });
     });
   });
 
   describe('HTTP 400 for invalid input', () => {
-    it('should throw BadRequestException for kpiNo = 0', async () => {
-      await expect(service.getKpiByNumber(0, { stateCode: 'ALL' })).rejects.toThrow(
-        BadRequestException,
-      );
+    it('should throw AppException (ACCR_INVALID_KPI) for kpiNo = 0', async () => {
+      await expect(service.getKpiByNumber(0, { stateCode: 'ALL' })).rejects.toThrow(AppException);
+      await expect(service.getKpiByNumber(0, { stateCode: 'ALL' })).rejects.toMatchObject({
+        errorCode: 'ACCR_INVALID_KPI',
+        httpStatus: 400,
+      });
     });
 
-    it('should throw BadRequestException for negative kpiNo', async () => {
-      await expect(service.getKpiByNumber(-1, { stateCode: 'ALL' })).rejects.toThrow(
-        BadRequestException,
-      );
+    it('should throw AppException (ACCR_INVALID_KPI) for negative kpiNo', async () => {
+      await expect(service.getKpiByNumber(-1, { stateCode: 'ALL' })).rejects.toThrow(AppException);
     });
 
-    it('should throw BadRequestException for kpiNo > 20', async () => {
-      await expect(service.getKpiByNumber(21, { stateCode: 'ALL' })).rejects.toThrow(
-        BadRequestException,
-      );
+    it('should throw AppException (ACCR_INVALID_KPI) for kpiNo > 20', async () => {
+      await expect(service.getKpiByNumber(21, { stateCode: 'ALL' })).rejects.toThrow(AppException);
     });
 
-    it('should throw BadRequestException for non-integer kpiNo', async () => {
-      await expect(service.getKpiByNumber(1.5, { stateCode: 'ALL' })).rejects.toThrow(
-        BadRequestException,
-      );
+    it('should throw AppException (ACCR_INVALID_KPI) for non-integer kpiNo', async () => {
+      await expect(service.getKpiByNumber(1.5, { stateCode: 'ALL' })).rejects.toThrow(AppException);
     });
 
-    it('should throw BadRequestException for NaN', async () => {
-      await expect(service.getKpiByNumber(NaN, { stateCode: 'ALL' })).rejects.toThrow(
-        BadRequestException,
-      );
+    it('should throw AppException (ACCR_INVALID_KPI) for NaN', async () => {
+      await expect(service.getKpiByNumber(NaN, { stateCode: 'ALL' })).rejects.toThrow(AppException);
     });
   });
 });
