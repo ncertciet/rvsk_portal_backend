@@ -14,6 +14,7 @@
     "build:6a": "nest build rvsk6a",
     "start:schemes": "nest start schemes --watch",
     "build:schemes": "nest build schemes",
+    "docs:apis": "node generate-api-catalog.js",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
