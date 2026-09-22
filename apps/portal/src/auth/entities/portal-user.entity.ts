@@ -23,11 +23,42 @@ export class PortalUser {
   @Column({ name: 'role', nullable: false, length: 50 })
   role: string;
 
-  @Column({ name: 'state_code', nullable: true, length: 2 })
-  stateCode: string;
+  // ── Geographic scope (view-sourced keys + denormalized name snapshots) ──
+  // *_key columns are bigint (PostgreSQL). The pg driver returns bigint as a
+  // JS string to avoid precision loss, so these are typed as `string`.
+  // Keys are authoritative; names are display snapshots populated from the
+  // rvsk_portal.vw_*_master views at write time.
 
-  @Column({ name: 'district_code', nullable: true, length: 10 })
-  districtCode: string;
+  @Column({ name: 'state_key', type: 'bigint', nullable: true })
+  stateKey: string | null;
+
+  @Column({ name: 'state_name', nullable: true, length: 150 })
+  stateName: string | null;
+
+  @Column({ name: 'district_key', type: 'bigint', nullable: true })
+  districtKey: string | null;
+
+  @Column({ name: 'district_name', nullable: true, length: 150 })
+  districtName: string | null;
+
+  @Column({ name: 'block_key', type: 'bigint', nullable: true })
+  blockKey: string | null;
+
+  @Column({ name: 'block_name', nullable: true, length: 150 })
+  blockName: string | null;
+
+  // Reserved for future use (cluster/school-level users not created yet).
+  @Column({ name: 'cluster_key', type: 'bigint', nullable: true })
+  clusterKey: string | null;
+
+  @Column({ name: 'cluster_name', nullable: true, length: 150 })
+  clusterName: string | null;
+
+  @Column({ name: 'udise_code', nullable: true, length: 20 })
+  udiseCode: string | null;
+
+  @Column({ name: 'school_name', nullable: true, length: 255 })
+  schoolName: string | null;
 
   @Column({ name: 'is_active', type: 'boolean', nullable: false, default: true })
   isActive: boolean;

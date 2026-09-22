@@ -7,8 +7,20 @@ export interface JwtPayload {
   sub: string;
   /** User role, e.g. "Super_Admin", "RVSK_SPOC" */
   role: string;
-  /** 2-character state code (empty string when null in DB) */
-  state_code: string;
+  /**
+   * Legacy 2-char state code (== vw_state_master.state_id). Retained for
+   * backward compatibility with domains (grievance, gallery, vsk, home) that
+   * still key on the 2-char code. Empty string when the user has no state.
+   */
+  state_code?: string;
+  /**
+   * Geographic scope keys (bigint as string; null/absent for national roles).
+   * RVSK-USR-MGMT-001.8 — carry the full chain so downstream services scope
+   * without extra lookups. Names are NOT placed in the token.
+   */
+  state_key?: string | null;
+  district_key?: string | null;
+  block_key?: string | null;
   /** UUID string identifying the user */
   user_id: string;
   /** Discriminator: "access" for API auth, "refresh" for token renewal */
@@ -29,6 +41,18 @@ export interface AuthenticatedUser {
   userId: string;
   username: string;
   role: string;
+  /**
+   * Legacy 2-char state code (state_id). Kept for backward compatibility with
+   * domains that still filter on the 2-char code. Empty string when absent.
+   */
   stateCode: string;
+  /**
+   * Geographic scope keys (bigint as string; null for national roles).
+   * Optional so existing consumers/fixtures that predate the geo-key model
+   * still type-check; the JwtStrategy always populates them (null when absent).
+   */
+  stateKey?: string | null;
+  districtKey?: string | null;
+  blockKey?: string | null;
   access?: Record<string, string[]>;
 }

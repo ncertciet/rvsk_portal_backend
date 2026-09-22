@@ -17,11 +17,19 @@ export class TokenService {
     this.refreshExpiry = parseInt(config.get('JWT_REFRESH_EXPIRY', '28800000'), 10); // 8 hr
   }
 
-  generateAccessToken(user: PortalUser, access?: Record<string, string[]>): string {
+  generateAccessToken(
+    user: PortalUser,
+    access?: Record<string, string[]>,
+    legacyStateCode?: string,
+  ): string {
     const payload: Partial<JwtPayload> = {
       sub: user.username,
       role: user.role,
-      state_code: user.stateCode || '',
+      // Legacy 2-char state code (state_id) for backward-compatible domains.
+      state_code: legacyStateCode ?? '',
+      state_key: user.stateKey ?? null,
+      district_key: user.districtKey ?? null,
+      block_key: user.blockKey ?? null,
       user_id: user.id,
       token_type: 'access',
     };

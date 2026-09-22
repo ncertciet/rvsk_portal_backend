@@ -498,11 +498,22 @@ export class GrievanceService {
       return null;
     }
 
+    // Grievances carry the legacy 2-char state code (== vw_state_master.state_id).
+    // Portal users now scope by state_key (bigint), so resolve the key first.
+    const stateRows = await this.userRepo.manager.query(
+      `SELECT state_key FROM rvsk_portal.vw_state_master WHERE state_id = $1`,
+      [stateCode],
+    );
+    if (!stateRows.length) {
+      return null;
+    }
+    const stateKey = String(stateRows[0].state_key);
+
     // Get all active SPOCs for this state
     const spocs = await this.userRepo.find({
       where: {
         role: RoleConstants.RVSK_SPOC,
-        stateCode,
+        stateKey,
         isActive: true,
       },
     });

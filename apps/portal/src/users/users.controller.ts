@@ -35,14 +35,14 @@ export class UsersController {
   async listUsers(
     @CurrentUser() user: AuthenticatedUser,
     @Query('role') role?: string,
-    @Query('stateCode') stateCode?: string,
+    @Query('stateKey') stateKey?: string,
     @Query('search') search?: string,
   ): Promise<UserListDto[]> {
     return this.usersService.listUsers(
       user.role,
-      user.stateCode,
+      user.stateKey ?? null,
       role,
-      stateCode,
+      stateKey,
       search,
     );
   }
@@ -68,7 +68,8 @@ export class UsersController {
     @CurrentUser() user?: AuthenticatedUser,
   ): Promise<CreateUserResponseDto> {
     const createdBy = adminId || (user ? user.userId : null);
-    return this.usersService.createUser(dto, createdBy);
+    const callerRole = user ? user.role : 'Super_Admin';
+    return this.usersService.createUser(dto, createdBy, callerRole);
   }
 
   /**

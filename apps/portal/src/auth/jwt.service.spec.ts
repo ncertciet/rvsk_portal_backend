@@ -12,7 +12,9 @@ describe('TokenService', () => {
     id: '550e8400-e29b-41d4-a716-446655440000',
     username: 'testuser',
     role: 'RVSK_Admin',
-    stateCode: 'UP',
+    stateKey: '5409972129818199085',
+    districtKey: null,
+    blockKey: null,
     displayName: 'Test User',
     isActive: true,
   };
@@ -46,15 +48,34 @@ describe('TokenService', () => {
 
   describe('generateAccessToken', () => {
     it('should generate a valid access token with correct claims', () => {
-      const token = tokenService.generateAccessToken(mockUser as PortalUser);
+      const token = tokenService.generateAccessToken(mockUser as PortalUser, undefined, 'UP');
       const decoded = jwtService.decode(token) as any;
 
       expect(decoded.sub).toBe('testuser');
       expect(decoded.role).toBe('RVSK_Admin');
-      expect(decoded.state_code).toBe('UP');
+      expect(decoded.state_code).toBe('UP'); // legacy 2-char claim
+      expect(decoded.state_key).toBe('5409972129818199085');
+      expect(decoded.district_key).toBeNull();
+      expect(decoded.block_key).toBeNull();
       expect(decoded.user_id).toBe('550e8400-e29b-41d4-a716-446655440000');
       expect(decoded.token_type).toBe('access');
       expect(decoded.exp).toBeDefined();
+    });
+
+    it('should carry the full geo key chain for a block-level user', () => {
+      const blockUser = {
+        ...mockUser,
+        role: 'Block_Admin',
+        stateKey: '111',
+        districtKey: '222',
+        blockKey: '333',
+      } as PortalUser;
+      const token = tokenService.generateAccessToken(blockUser, undefined, '09');
+      const decoded = jwtService.decode(token) as any;
+
+      expect(decoded.state_key).toBe('111');
+      expect(decoded.district_key).toBe('222');
+      expect(decoded.block_key).toBe('333');
     });
 
     it('should include access map when provided and non-empty', () => {
@@ -72,12 +93,13 @@ describe('TokenService', () => {
       expect(decoded.access).toBeUndefined();
     });
 
-    it('should use empty string for stateCode when null', () => {
-      const userWithNullState = { ...mockUser, stateCode: null } as PortalUser;
+    it('should use empty string for legacy state_code when not provided', () => {
+      const userWithNullState = { ...mockUser, stateKey: null } as PortalUser;
       const token = tokenService.generateAccessToken(userWithNullState);
       const decoded = jwtService.decode(token) as any;
 
       expect(decoded.state_code).toBe('');
+      expect(decoded.state_key).toBeNull();
     });
   });
 

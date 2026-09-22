@@ -16,8 +16,10 @@ export class FormResponse {
   @Column({ name: 'submitted_by', type: 'uuid' })
   userId: string;
 
-  @Column({ name: 'state_code', nullable: true, length: 2 })
-  stateCode: string;
+  // Geographic scope key (bigint) of the submitting user. pg returns bigint
+  // as a JS string.
+  @Column({ name: 'state_key', type: 'bigint', nullable: true })
+  stateKey: string;
 
   @Column({ name: 'status', nullable: false, length: 20, default: 'SUBMITTED' })
   status: string;

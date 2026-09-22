@@ -30,9 +30,12 @@ export class FormExportService {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Responses');
 
-    // Header row: State Code, then question texts in displayOrder
-    const headers = ['State Code', ...questions.map((q) => q.questionText)];
+    // Header row: State, then question texts in displayOrder
+    const headers = ['State', ...questions.map((q) => q.questionText)];
     sheet.addRow(headers);
+
+    // Resolve state names for the response state keys (one lookup).
+    const stateNameByKey = await this.resolveStateNames(responses.map((r) => r.stateKey));
 
     // Data rows: one per response
     for (const response of responses) {
@@ -40,7 +43,7 @@ export class FormExportService {
         where: { responseId: response.id },
       });
 
-      const row: string[] = [response.stateCode || ''];
+      const row: string[] = [stateNameByKey.get(String(response.stateKey)) || String(response.stateKey || '')];
       for (const question of questions) {
         const answer = answers.find((a) => a.questionId === question.id);
         row.push(answer?.answerText || '');
@@ -65,10 +68,13 @@ export class FormExportService {
 
     // Header row
     const headers = [
-      '"State Code"',
+      '"State"',
       ...questions.map((q) => `"${q.questionText.replace(/"/g, '""')}"`),
     ];
     let csv = headers.join(',') + '\n';
+
+    // Resolve state names for the response state keys.
+    const stateNameByKey = await this.resolveStateNames(responses.map((r) => r.stateKey));
 
     // Data rows
     for (const response of responses) {
@@ -76,8 +82,9 @@ export class FormExportService {
         where: { responseId: response.id },
       });
 
+      const stateLabel = stateNameByKey.get(String(response.stateKey)) || String(response.stateKey || '');
       const row = [
-        `"${response.stateCode || ''}"`,
+        `"${stateLabel.replace(/"/g, '""')}"`,
         ...questions.map((q) => {
           const answer = answers.find((a) => a.questionId === q.id);
           const val = answer?.answerText || '';
@@ -88,5 +95,25 @@ export class FormExportService {
     }
 
     return csv;
+  }
+
+  /**
+   * Resolve a map of state_key -> state_name for the given keys, so exports
+   * show readable state names instead of bigint keys.
+   */
+  private async resolveStateNames(
+    keys: Array<string | null | undefined>,
+  ): Promise<Map<string, string>> {
+    const unique = Array.from(
+      new Set(keys.filter((k): k is string => !!k && /^\d+$/.test(String(k))).map(String)),
+    );
+    const map = new Map<string, string>();
+    if (unique.length === 0) return map;
+    const rows = await this.responseRepository.manager.query(
+      `SELECT state_key, state_name FROM rvsk_portal.vw_state_master WHERE state_key = ANY($1::bigint[])`,
+      [unique],
+    );
+    for (const r of rows) map.set(String(r.state_key), r.state_name);
+    return map;
   }
 }

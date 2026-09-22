@@ -96,12 +96,14 @@ export class AuthController {
   ): Promise<ProfileResponse> {
     // Update profile fields
     const profile = await this.authService.updateProfile(user.username, dto);
-    // If new password provided, change it (marks first login complete)
+    // If new password provided, change it (first-login flow: skip the
+    // current-password check since the user is setting it for the first time).
     if (dto.newPassword) {
-      await this.authService.changePassword(user.username, {
-        oldPassword: '', // first login bypass — service should handle
-        newPassword: dto.newPassword,
-      } as any);
+      await this.authService.changePassword(
+        user.username,
+        { oldPassword: '', newPassword: dto.newPassword } as any,
+        true, // skipOldPasswordCheck — first-login bypass
+      );
     }
     return profile;
   }

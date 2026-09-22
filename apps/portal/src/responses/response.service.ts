@@ -26,7 +26,7 @@ export class FormResponseService {
     formId: string,
     answers: AnswerDto[],
     userId: string,
-    stateCode: string,
+    stateKey: string | null,
   ): Promise<FormResponse> {
     // Validate form exists and is PUBLISHED
     const form = await this.formRepository.findOne({ where: { id: formId } });
@@ -72,7 +72,7 @@ export class FormResponseService {
     response.id = uuidv4();
     response.formId = formId;
     response.userId = userId;
-    response.stateCode = stateCode;
+    response.stateKey = stateKey;
     response.status = 'SUBMITTED';
     response.submittedAt = new Date();
 
@@ -89,6 +89,16 @@ export class FormResponseService {
     });
 
     await this.answerRepository.save(formAnswers);
+
+    // Mark this state's assignment as SUBMITTED so My Forms reflects it.
+    if (stateKey) {
+      await this.responseRepository.manager.query(
+        `UPDATE rvsk_portal.form_assignment
+            SET submission_status = 'SUBMITTED'
+          WHERE form_id = $1 AND state_key = $2`,
+        [formId, stateKey],
+      );
+    }
 
     return savedResponse;
   }

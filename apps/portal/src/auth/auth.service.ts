@@ -29,8 +29,12 @@ export interface UserResponse {
   username: string;
   displayName: string;
   role: string;
-  stateCode: string;
-  districtCode: string;
+  stateKey: string | null;
+  stateName: string | null;
+  districtKey: string | null;
+  districtName: string | null;
+  blockKey: string | null;
+  blockName: string | null;
   isActive: boolean;
   lastLoginAt: Date | null;
 }
@@ -40,8 +44,12 @@ export interface ProfileResponse {
   username: string;
   displayName: string;
   role: string;
-  stateCode: string;
-  districtCode: string;
+  stateKey: string | null;
+  stateName: string | null;
+  districtKey: string | null;
+  districtName: string | null;
+  blockKey: string | null;
+  blockName: string | null;
   phone: string;
   designation: string;
   department: string;
@@ -68,9 +76,11 @@ export class AuthService {
     private readonly httpService: HttpService,
     private readonly permissionServiceV2: PermissionServiceV2,
   ) {
-    this.maxFailedAttempts = this.configService.get<number>('MAX_FAILED_ATTEMPTS', 5);
-    this.lockoutDurationMinutes = this.configService.get<number>('LOCKOUT_DURATION_MINUTES', 15);
-    this.bcryptStrength = this.configService.get<number>('BCRYPT_STRENGTH', 12);
+    this.maxFailedAttempts = parseInt(String(this.configService.get('MAX_FAILED_ATTEMPTS', 5)), 10) || 5;
+    this.lockoutDurationMinutes = parseInt(String(this.configService.get('LOCKOUT_DURATION_MINUTES', 15)), 10) || 15;
+    // bcrypt needs a numeric salt-rounds value; env values arrive as strings.
+    const rounds = parseInt(String(this.configService.get('BCRYPT_STRENGTH', 12)), 10);
+    this.bcryptStrength = Number.isNaN(rounds) ? 12 : rounds;
     this.externalAuthUrl = this.configService.get<string>('EXTERNAL_AUTH_URL', '');
   }
 
@@ -188,7 +198,8 @@ export class AuthService {
     const access = await this.permissionServiceV2.getResolvedAccess(user.id, user.role);
 
     // Generate new access token
-    const newAccessToken = this.tokenService.generateAccessToken(user, access);
+    const legacyStateCode = await this.resolveLegacyStateCode(user);
+    const newAccessToken = this.tokenService.generateAccessToken(user, access, legacyStateCode);
 
     return {
       success: true,
@@ -197,7 +208,7 @@ export class AuthService {
       refreshToken,
       tokenType: 'Bearer',
       firstLogin: false,
-      user: this.toLoginResponseUser(user),
+      user: this.toLoginResponseUser(user, legacyStateCode),
       access,
     };
   }
@@ -207,7 +218,11 @@ export class AuthService {
   /**
    * Change password for the currently authenticated user.
    */
-  async changePassword(username: string, dto: ChangePasswordDto): Promise<void> {
+  async changePassword(
+    username: string,
+    dto: ChangePasswordDto,
+    skipOldPasswordCheck = false,
+  ): Promise<void> {
     const user = await this.userRepo.findOne({ where: { username } });
 
     if (!user) {
@@ -226,17 +241,26 @@ export class AuthService {
       );
     }
 
-    const isMatch = await bcrypt.compare(dto.effectiveOldPassword, user.passwordHash);
-    if (!isMatch) {
-      throw new AppException(
-        'Current password is incorrect',
-        HttpStatus.BAD_REQUEST,
-        'INVALID_CURRENT_PASSWORD',
-      );
+    // First-login bypass: on the initial profile-completion flow the user has
+    // not chosen a password yet, so the current-password check is skipped.
+    // Otherwise the current password must match.
+    if (!skipOldPasswordCheck) {
+      const oldPassword = dto.effectiveOldPassword;
+      const isMatch = oldPassword
+        ? await bcrypt.compare(oldPassword, user.passwordHash)
+        : false;
+      if (!isMatch) {
+        throw new AppException(
+          'Current password is incorrect',
+          HttpStatus.BAD_REQUEST,
+          'INVALID_CURRENT_PASSWORD',
+        );
+      }
     }
 
     user.passwordHash = await bcrypt.hash(dto.newPassword, this.bcryptStrength);
     user.passwordChangedAt = new Date();
+    user.isFirstLogin = false;
     await this.userRepo.save(user);
 
     this.logger.log(`Password changed for user: ${username}`);
@@ -332,6 +356,12 @@ export class AuthService {
       );
     }
 
+    // Reject a contact email already used by a different user, with a clear
+    // message (instead of a generic failure).
+    if (dto.contactEmail !== undefined && dto.contactEmail !== null && dto.contactEmail !== '') {
+      await this.assertContactEmailAvailable(dto.contactEmail, user.id);
+    }
+
     if (dto.displayName !== undefined) user.displayName = dto.displayName;
     if (dto.phone !== undefined) user.phone = dto.phone;
     if (dto.designation !== undefined) user.designation = dto.designation;
@@ -344,6 +374,29 @@ export class AuthService {
     this.logger.log(`Profile updated for user: ${username}`);
 
     return this.toProfileResponse(user);
+  }
+
+  /**
+   * Throws a clear 409 if the given contact email is already used by a
+   * different user. Case-insensitive. `excludeUserId` skips the current user
+   * so re-saving their own email is allowed.
+   */
+  private async assertContactEmailAvailable(
+    contactEmail: string,
+    excludeUserId?: string,
+  ): Promise<void> {
+    const existing = await this.userRepo
+      .createQueryBuilder('u')
+      .where('LOWER(u.contactEmail) = LOWER(:email)', { email: contactEmail.trim() })
+      .getMany();
+    const clash = existing.some((u) => u.id !== excludeUserId);
+    if (clash) {
+      throw new AppException(
+        'This contact email is already registered to another user. Please use a different email.',
+        HttpStatus.CONFLICT,
+        'CONTACT_EMAIL_EXISTS',
+      );
+    }
   }
 
   // ==================== PRIVATE HELPERS ====================
@@ -372,7 +425,8 @@ export class AuthService {
     const access = await this.permissionServiceV2.getResolvedAccess(user.id, user.role);
 
     // Generate tokens
-    const accessToken = this.tokenService.generateAccessToken(user, access);
+    const legacyStateCode = await this.resolveLegacyStateCode(user);
+    const accessToken = this.tokenService.generateAccessToken(user, access, legacyStateCode);
     const refreshToken = this.tokenService.generateRefreshToken(user);
 
     this.logger.log(
@@ -386,7 +440,7 @@ export class AuthService {
       refreshToken,
       tokenType: 'Bearer',
       firstLogin: user.isFirstLogin === true,
-      user: this.toLoginResponseUser(user),
+      user: this.toLoginResponseUser(user, legacyStateCode),
       access,
     };
   }
@@ -418,7 +472,8 @@ export class AuthService {
     const access = await this.permissionServiceV2.getResolvedAccess(user.id, user.role);
 
     // Generate tokens
-    const accessToken = this.tokenService.generateAccessToken(user, access);
+    const legacyStateCode = await this.resolveLegacyStateCode(user);
+    const accessToken = this.tokenService.generateAccessToken(user, access, legacyStateCode);
     const refreshToken = this.tokenService.generateRefreshToken(user);
 
     this.logger.log(
@@ -432,7 +487,7 @@ export class AuthService {
       refreshToken,
       tokenType: 'Bearer',
       firstLogin: user.isFirstLogin === true,
-      user: this.toLoginResponseUser(user),
+      user: this.toLoginResponseUser(user, legacyStateCode),
       access,
     };
   }
@@ -562,14 +617,19 @@ export class AuthService {
   /**
    * Map PortalUser to LoginResponseUser DTO.
    */
-  private toLoginResponseUser(user: PortalUser): LoginResponseUser {
+  private toLoginResponseUser(user: PortalUser, legacyStateCode = ''): LoginResponseUser {
     const responseUser = new LoginResponseUser();
     responseUser.id = user.id;
     responseUser.username = user.username;
     responseUser.displayName = user.displayName;
     responseUser.role = user.role;
-    responseUser.stateCode = user.stateCode;
-    responseUser.districtCode = user.districtCode;
+    responseUser.stateCode = legacyStateCode || null;
+    responseUser.stateKey = user.stateKey ?? null;
+    responseUser.stateName = user.stateName ?? null;
+    responseUser.districtKey = user.districtKey ?? null;
+    responseUser.districtName = user.districtName ?? null;
+    responseUser.blockKey = user.blockKey ?? null;
+    responseUser.blockName = user.blockName ?? null;
     responseUser.isActive = user.isActive;
     responseUser.lastLoginAt = user.lastLoginAt || null;
     return responseUser;
@@ -584,8 +644,12 @@ export class AuthService {
       username: user.username,
       displayName: user.displayName,
       role: user.role,
-      stateCode: user.stateCode,
-      districtCode: user.districtCode,
+      stateKey: user.stateKey ?? null,
+      stateName: user.stateName ?? null,
+      districtKey: user.districtKey ?? null,
+      districtName: user.districtName ?? null,
+      blockKey: user.blockKey ?? null,
+      blockName: user.blockName ?? null,
       isActive: user.isActive,
       lastLoginAt: user.lastLoginAt || null,
     };
@@ -600,8 +664,12 @@ export class AuthService {
       username: user.username,
       displayName: user.displayName,
       role: user.role,
-      stateCode: user.stateCode,
-      districtCode: user.districtCode,
+      stateKey: user.stateKey ?? null,
+      stateName: user.stateName ?? null,
+      districtKey: user.districtKey ?? null,
+      districtName: user.districtName ?? null,
+      blockKey: user.blockKey ?? null,
+      blockName: user.blockName ?? null,
       phone: user.phone,
       designation: user.designation,
       department: user.department,
@@ -612,4 +680,23 @@ export class AuthService {
       lastLoginAt: user.lastLoginAt || null,
     };
   }
+
+  /**
+   * Resolve the legacy 2-char state code (== vw_state_master.state_id) from
+   * the user's stateKey, for backward-compatible JWT/domain consumers.
+   * Returns '' when the user has no state or the key is unknown.
+   */
+  private async resolveLegacyStateCode(user: PortalUser): Promise<string> {
+    if (!user.stateKey) return '';
+    try {
+      const rows = await this.userRepo.manager.query(
+        `SELECT state_id FROM rvsk_portal.vw_state_master WHERE state_key = $1`,
+        [user.stateKey],
+      );
+      return rows.length ? String(rows[0].state_id) : '';
+    } catch {
+      return '';
+    }
+  }
 }
+

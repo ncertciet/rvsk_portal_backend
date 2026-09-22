@@ -52,9 +52,10 @@ describe('Property: JWT Token Round-Trip (Property 1)', () => {
             id: userData.userId,
             username: userData.username,
             role: userData.role,
-            stateCode: userData.stateCode,
+            stateKey: null,
           } as PortalUser;
-          const token = tokenService.generateAccessToken(user);
+          // Legacy 2-char state code is passed explicitly at token generation.
+          const token = tokenService.generateAccessToken(user, undefined, userData.stateCode);
           const payload = tokenService.validateToken(token);
           return (
             payload.sub === userData.username &&
@@ -84,7 +85,7 @@ describe('Property: JWT Token Round-Trip (Property 1)', () => {
             id: userData.userId,
             username: userData.username,
             role: userData.role,
-            stateCode: userData.stateCode,
+            stateKey: null,
           } as PortalUser;
           const token = tokenService.generateRefreshToken(user);
           return tokenService.isRefreshToken(token) === true;
@@ -100,7 +101,7 @@ describe('Property: JWT Token Round-Trip (Property 1)', () => {
           id: userId,
           username: 'test',
           role: 'Admin',
-          stateCode: 'UP',
+          stateKey: null,
         } as PortalUser;
         const token = tokenService.generateAccessToken(user);
         return tokenService.isRefreshToken(token) === false;

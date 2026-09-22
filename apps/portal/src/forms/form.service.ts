@@ -71,6 +71,50 @@ export class FormService {
     return new PageResponse(content, totalElements, page, size);
   }
 
+  /**
+   * List forms assigned to the given user's state (RVSK-USR-MGMT-001 forms
+   * alignment). Joins form_assignment on the user's state_key, returns only
+   * PUBLISHED (or CLOSED) forms with the per-state submission status.
+   */
+  async getMyForms(stateKey: string | null): Promise<Array<{
+    id: string;
+    title: string;
+    description: string | null;
+    dueDate: Date | null;
+    status: string;
+    submissionStatus: string;
+    questionCount: number;
+  }>> {
+    if (!stateKey || !/^\d+$/.test(stateKey)) {
+      // Non-geo / national users have no assigned-state forms.
+      return [];
+    }
+
+    const rows = await this.formRepository.manager.query(
+      `SELECT f.id, f.title, f.description, f.due_date AS "dueDate",
+              f.status, a.submission_status AS "submissionStatus"
+         FROM rvsk_portal.form_assignment a
+         JOIN rvsk_portal.form_master f ON f.id = a.form_id
+        WHERE a.state_key = $1
+          AND f.status IN ('PUBLISHED', 'CLOSED')
+        ORDER BY f.due_date NULLS LAST, f.created_date DESC`,
+      [stateKey],
+    );
+
+    // Attach question counts (small N of assigned forms).
+    return Promise.all(
+      rows.map(async (r: any) => ({
+        id: r.id,
+        title: r.title,
+        description: r.description ?? null,
+        dueDate: r.dueDate ?? null,
+        status: r.status,
+        submissionStatus: r.submissionStatus,
+        questionCount: await this.questionRepository.count({ where: { formId: r.id } }),
+      })),
+    );
+  }
+
   async getForm(id: string): Promise<any> {
     const form = await this.formRepository.findOne({ where: { id } });
 
@@ -189,28 +233,59 @@ export class FormService {
       );
     }
 
-    // Transition status
-    form.status = 'PUBLISHED';
-    form.publishDate = new Date();
-    form.updatedBy = userId;
-
-    if (request.dueDate) {
-      form.dueDate = new Date(request.dueDate);
+    // Validate every state key is numeric and exists in the master view.
+    // This prevents a partial publish where the status is flipped but the
+    // assignment insert then fails.
+    const badFormat = request.stateKeys.filter((k) => !/^\d+$/.test(String(k)));
+    if (badFormat.length > 0) {
+      throw new AppException(
+        `Invalid state key(s): ${badFormat.join(', ')}.`,
+        HttpStatus.BAD_REQUEST,
+        'INVALID_STATE_KEY',
+      );
     }
 
-    const saved = await this.formRepository.save(form);
+    const uniqueKeys = Array.from(new Set(request.stateKeys.map((k) => String(k))));
+    const existingRows = await this.formRepository.manager.query(
+      `SELECT state_key FROM rvsk_portal.vw_state_master WHERE state_key = ANY($1::bigint[])`,
+      [uniqueKeys],
+    );
+    const existingKeys = new Set(existingRows.map((r: any) => String(r.state_key)));
+    const unknown = uniqueKeys.filter((k) => !existingKeys.has(k));
+    if (unknown.length > 0) {
+      throw new AppException(
+        `Unknown state key(s): ${unknown.join(', ')}.`,
+        HttpStatus.BAD_REQUEST,
+        'UNKNOWN_STATE_KEY',
+      );
+    }
 
-    // Create FormAssignment records for each stateCode
-    const assignments: FormAssignment[] = request.stateCodes.map((stateCode) => {
-      const assignment = new FormAssignment();
-      assignment.id = uuidv4();
-      assignment.formId = id;
-      assignment.stateCode = stateCode;
-      assignment.submissionStatus = 'PENDING';
-      return assignment;
+    // Transition status + write assignments atomically. If assignment insert
+    // fails, the status change rolls back too (no half-published form).
+    const saved = await this.formRepository.manager.transaction(async (em) => {
+      form.status = 'PUBLISHED';
+      form.publishDate = new Date();
+      form.updatedBy = userId;
+      if (request.dueDate) {
+        form.dueDate = new Date(request.dueDate);
+      }
+      const savedForm = await em.save(form);
+
+      // Replace any existing assignments for idempotency on retry.
+      await em.delete(FormAssignment, { formId: id });
+
+      const assignments: FormAssignment[] = uniqueKeys.map((stateKey) => {
+        const assignment = new FormAssignment();
+        assignment.id = uuidv4();
+        assignment.formId = id;
+        assignment.stateKey = stateKey;
+        assignment.submissionStatus = 'PENDING';
+        return assignment;
+      });
+      await em.save(assignments);
+
+      return savedForm;
     });
-
-    await this.assignmentRepository.save(assignments);
 
     return this.toDetailResponse(saved, questionCount);
   }

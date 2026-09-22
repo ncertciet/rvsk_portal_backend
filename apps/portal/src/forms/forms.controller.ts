@@ -64,6 +64,15 @@ export class FormsController {
   }
 
   /**
+   * GET /api/v1/forms/my-forms — Forms assigned to the current user's state.
+   * Declared before :id so "my-forms" is not captured as a form id.
+   */
+  @Get('my-forms')
+  async getMyForms(@CurrentUser() user: AuthenticatedUser) {
+    return this.formService.getMyForms(user.stateKey ?? null);
+  }
+
+  /**
    * GET /api/v1/forms/:id — Get form details by ID.
    */
   @Get(':id')
@@ -191,7 +200,7 @@ export class FormsController {
       formId,
       dto.answers,
       user.userId,
-      user.stateCode,
+      user.stateKey ?? null,
     );
   }
 

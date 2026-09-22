@@ -14,6 +14,35 @@ import {
   CreateUserResponseDto,
   UserProfileDto,
 } from './dto/user-list.dto';
+import { MasterDataService } from '../master-data/master-data.service';
+import {
+  canCreateRole,
+  geoLevelForRole,
+  isNonGeoRole,
+  isValidRole,
+} from './user-roles';
+
+/**
+ * Resolved geo scope: the keys to persist plus the *_name snapshots looked up
+ * from the master views. Null-filled for non-geo roles.
+ */
+interface ResolvedScope {
+  stateKey: string | null;
+  stateName: string | null;
+  districtKey: string | null;
+  districtName: string | null;
+  blockKey: string | null;
+  blockName: string | null;
+}
+
+const EMPTY_SCOPE: ResolvedScope = {
+  stateKey: null,
+  stateName: null,
+  districtKey: null,
+  districtName: null,
+  blockKey: null,
+  blockName: null,
+};
 
 @Injectable()
 export class UsersService {
@@ -24,8 +53,151 @@ export class UsersService {
     @InjectRepository(PortalUser)
     private readonly userRepo: Repository<PortalUser>,
     private readonly configService: ConfigService,
+    private readonly masterDataService: MasterDataService,
   ) {
-    this.bcryptStrength = this.configService.get<number>('BCRYPT_STRENGTH', 12);
+    // ConfigService returns env values as strings; bcrypt.hash needs a numeric
+    // salt-rounds value, so coerce explicitly (a string like "10" is otherwise
+    // treated as a salt and throws "Invalid salt").
+    const rounds = parseInt(String(this.configService.get('BCRYPT_STRENGTH', 12)), 10);
+    this.bcryptStrength = Number.isNaN(rounds) ? 12 : rounds;
+  }
+
+  // ==================== ROLE + GEO VALIDATION HELPERS ====================
+
+  /**
+   * Resolve and validate the geo scope for a role (spec .2 / .8).
+   * - Non-geo roles → all scope null (any provided keys are ignored/rejected).
+   * - State_Admin → stateKey required.
+   * - District_Admin → stateKey + districtKey required; district must belong
+   *   to the state.
+   * - Block_Admin → stateKey + districtKey + blockKey required; block must
+   *   belong to the district, district to the state.
+   * Names are snapshotted from the master views. Throws 400 on any violation.
+   */
+  private async resolveAndValidateScope(
+    role: string,
+    keys: { stateKey?: string | null; districtKey?: string | null; blockKey?: string | null },
+  ): Promise<ResolvedScope> {
+    const level = geoLevelForRole(role);
+
+    // Non-geo roles must carry no scope.
+    if (isNonGeoRole(role) || level === null) {
+      if (keys.stateKey || keys.districtKey || keys.blockKey) {
+        throw new AppException(
+          `Role ${role} must not have a geographic scope`,
+          HttpStatus.BAD_REQUEST,
+          'GEO_NOT_ALLOWED',
+        );
+      }
+      return { ...EMPTY_SCOPE };
+    }
+
+    // State is required for every geo role.
+    if (!keys.stateKey) {
+      throw new AppException(
+        'State is required for this role',
+        HttpStatus.BAD_REQUEST,
+        'STATE_REQUIRED',
+      );
+    }
+    const state = await this.masterDataService.findState(keys.stateKey);
+    if (!state) {
+      throw new AppException(
+        'Selected state does not exist',
+        HttpStatus.BAD_REQUEST,
+        'INVALID_STATE',
+      );
+    }
+
+    if (level === 'state') {
+      // District/Block must not be set for a state-level role.
+      if (keys.districtKey || keys.blockKey) {
+        throw new AppException(
+          'State_Admin must not carry a district or block',
+          HttpStatus.BAD_REQUEST,
+          'GEO_TOO_DEEP',
+        );
+      }
+      return {
+        ...EMPTY_SCOPE,
+        stateKey: state.stateKey,
+        stateName: state.stateName,
+      };
+    }
+
+    // District required for district + block roles.
+    if (!keys.districtKey) {
+      throw new AppException(
+        'District is required for this role',
+        HttpStatus.BAD_REQUEST,
+        'DISTRICT_REQUIRED',
+      );
+    }
+    const district = await this.masterDataService.findDistrict(keys.districtKey);
+    if (!district) {
+      throw new AppException(
+        'Selected district does not exist',
+        HttpStatus.BAD_REQUEST,
+        'INVALID_DISTRICT',
+      );
+    }
+    if (district.stateKey !== state.stateKey) {
+      throw new AppException(
+        'Selected district does not belong to the selected state',
+        HttpStatus.BAD_REQUEST,
+        'CHAIN_MISMATCH',
+      );
+    }
+
+    if (level === 'district') {
+      if (keys.blockKey) {
+        throw new AppException(
+          'District_Admin must not carry a block',
+          HttpStatus.BAD_REQUEST,
+          'GEO_TOO_DEEP',
+        );
+      }
+      return {
+        ...EMPTY_SCOPE,
+        stateKey: state.stateKey,
+        stateName: state.stateName,
+        districtKey: district.districtKey,
+        districtName: district.districtName,
+      };
+    }
+
+    // level === 'block'
+    if (!keys.blockKey) {
+      throw new AppException(
+        'Block is required for this role',
+        HttpStatus.BAD_REQUEST,
+        'BLOCK_REQUIRED',
+      );
+    }
+    const block = await this.masterDataService.findBlock(keys.blockKey);
+    if (!block) {
+      throw new AppException(
+        'Selected block does not exist',
+        HttpStatus.BAD_REQUEST,
+        'INVALID_BLOCK',
+      );
+    }
+    if (block.districtKey !== district.districtKey) {
+      throw new AppException(
+        'Selected block does not belong to the selected district',
+        HttpStatus.BAD_REQUEST,
+        'CHAIN_MISMATCH',
+      );
+    }
+
+    return {
+      stateKey: state.stateKey,
+      stateName: state.stateName,
+      districtKey: district.districtKey,
+      districtName: district.districtName,
+      blockKey: block.blockKey,
+      blockName: block.blockName,
+    };
   }
 
   // ==================== LIST USERS ====================
@@ -37,9 +209,9 @@ export class UsersService {
    */
   async listUsers(
     callerRole: string,
-    callerStateCode: string,
+    callerStateKey: string | null,
     role?: string,
-    stateCode?: string,
+    stateKey?: string,
     search?: string,
   ): Promise<UserListDto[]> {
     // Build query conditions
@@ -47,11 +219,11 @@ export class UsersService {
 
     // State_Admin scope enforcement: can only see users in their own state
     if (callerRole === 'State_Admin') {
-      where.stateCode = callerStateCode;
+      where.stateKey = callerStateKey;
     } else {
-      // Super_Admin / RVSK_Admin: apply optional stateCode filter
-      if (stateCode) {
-        where.stateCode = stateCode;
+      // Super_Admin / RVSK_Admin: apply optional stateKey filter
+      if (stateKey) {
+        where.stateKey = stateKey;
       }
     }
 
@@ -104,7 +276,36 @@ export class UsersService {
   async createUser(
     dto: CreateUserDto,
     createdBy: string,
+    callerRole: string,
   ): Promise<CreateUserResponseDto> {
+    // Validate the target role is a known role.
+    if (!isValidRole(dto.role)) {
+      throw new AppException(
+        `Unknown role: ${dto.role}`,
+        HttpStatus.BAD_REQUEST,
+        'INVALID_ROLE',
+      );
+    }
+
+    // Role-based creation authority (spec .1): RVSK_Admin cannot create Super_Admin.
+    if (!canCreateRole(callerRole, dto.role)) {
+      this.logger.warn(
+        `Authority violation: ${callerRole} attempted to create role ${dto.role} (by ${createdBy})`,
+      );
+      throw new AppException(
+        `You are not permitted to create a ${dto.role} user`,
+        HttpStatus.FORBIDDEN,
+        'CREATE_ROLE_FORBIDDEN',
+      );
+    }
+
+    // Resolve + validate geo scope (spec .2 / .8) and snapshot names.
+    const scope = await this.resolveAndValidateScope(dto.role, {
+      stateKey: dto.stateKey,
+      districtKey: dto.districtKey,
+      blockKey: dto.blockKey,
+    });
+
     // Check username uniqueness
     const existing = await this.userRepo.findOne({
       where: { username: dto.username },
@@ -117,6 +318,9 @@ export class UsersService {
         'USERNAME_EXISTS',
       );
     }
+
+    // Reject a contact email already used by another user (clear message).
+    await this.assertContactEmailAvailable(dto.contactEmail);
 
     // Generate temp password: Rvsk@ + 4 random digits
     const tempPassword = this.generateTempPassword();
@@ -131,8 +335,18 @@ export class UsersService {
       displayName: dto.displayName,
       passwordHash,
       role: dto.role,
-      stateCode: dto.stateCode || null,
-      districtCode: dto.districtCode || null,
+      stateKey: scope.stateKey,
+      stateName: scope.stateName,
+      districtKey: scope.districtKey,
+      districtName: scope.districtName,
+      blockKey: scope.blockKey,
+      blockName: scope.blockName,
+      phone: dto.phone ?? null,
+      mobileNumber: dto.mobileNumber ?? null,
+      designation: dto.designation ?? null,
+      department: dto.department ?? null,
+      userEmail: dto.userEmail ?? null,
+      contactEmail: dto.contactEmail,
       isActive: true,
       isFirstLogin: true,
       failedAttempts: 0,
@@ -169,21 +383,78 @@ export class UsersService {
     }
 
     if (dto.displayName !== undefined) user.displayName = dto.displayName;
-    if (dto.role !== undefined) user.role = dto.role;
-    if (dto.stateCode !== undefined) user.stateCode = dto.stateCode;
-    // districtCode is always set (can be cleared to null)
-    if ('districtCode' in dto) user.districtCode = dto.districtCode;
+
+    // The effective role after this edit determines geo requirements.
+    const effectiveRole = dto.role !== undefined ? dto.role : user.role;
+    if (dto.role !== undefined) {
+      if (!isValidRole(dto.role)) {
+        throw new AppException(
+          `Unknown role: ${dto.role}`,
+          HttpStatus.BAD_REQUEST,
+          'INVALID_ROLE',
+        );
+      }
+      user.role = dto.role;
+    }
+
+    // Re-resolve geo scope whenever role or any geo key is part of the edit.
+    // Use the incoming key when provided, else fall back to the stored key so
+    // a role-only edit still validates against the existing chain.
+    const roleChanged = dto.role !== undefined;
+    const geoTouched =
+      'stateKey' in dto || 'districtKey' in dto || 'blockKey' in dto;
+
+    if (roleChanged || geoTouched) {
+      const scope = await this.resolveAndValidateScope(effectiveRole, {
+        stateKey: 'stateKey' in dto ? dto.stateKey : user.stateKey,
+        districtKey: 'districtKey' in dto ? dto.districtKey : user.districtKey,
+        blockKey: 'blockKey' in dto ? dto.blockKey : user.blockKey,
+      });
+      user.stateKey = scope.stateKey;
+      user.stateName = scope.stateName;
+      user.districtKey = scope.districtKey;
+      user.districtName = scope.districtName;
+      user.blockKey = scope.blockKey;
+      user.blockName = scope.blockName;
+    }
+
     if (dto.phone !== undefined) user.phone = dto.phone;
+    if (dto.mobileNumber !== undefined) user.mobileNumber = dto.mobileNumber;
     if (dto.designation !== undefined) user.designation = dto.designation;
     if (dto.department !== undefined) user.department = dto.department;
     if (dto.userEmail !== undefined) user.userEmail = dto.userEmail;
-    if (dto.contactEmail !== undefined) user.contactEmail = dto.contactEmail;
-    if (dto.mobileNumber !== undefined) user.mobileNumber = dto.mobileNumber;
+    if (dto.contactEmail !== undefined && dto.contactEmail !== null && dto.contactEmail !== '') {
+      await this.assertContactEmailAvailable(dto.contactEmail, user.id);
+      user.contactEmail = dto.contactEmail;
+    } else if (dto.contactEmail !== undefined) {
+      user.contactEmail = dto.contactEmail;
+    }
 
     const savedUser = await this.userRepo.save(user);
     this.logger.log(`User edited: ${savedUser.username}`);
 
     return this.toUserListDto(savedUser);
+  }
+
+  /**
+   * Throws a clear 409 if the contact email is already used by a different
+   * user (case-insensitive). `excludeUserId` allows a user to keep their own.
+   */
+  private async assertContactEmailAvailable(
+    contactEmail: string,
+    excludeUserId?: string,
+  ): Promise<void> {
+    const matches = await this.userRepo
+      .createQueryBuilder('u')
+      .where('LOWER(u.contactEmail) = LOWER(:email)', { email: contactEmail.trim() })
+      .getMany();
+    if (matches.some((u) => u.id !== excludeUserId)) {
+      throw new AppException(
+        'This contact email is already registered to another user. Please use a different email.',
+        HttpStatus.CONFLICT,
+        'CONTACT_EMAIL_EXISTS',
+      );
+    }
   }
 
   // ==================== DELETE USER ====================
@@ -356,8 +627,12 @@ export class UsersService {
     dto.username = user.username;
     dto.displayName = user.displayName;
     dto.role = user.role;
-    dto.stateCode = user.stateCode;
-    dto.districtCode = user.districtCode;
+    dto.stateKey = user.stateKey ?? null;
+    dto.stateName = user.stateName ?? null;
+    dto.districtKey = user.districtKey ?? null;
+    dto.districtName = user.districtName ?? null;
+    dto.blockKey = user.blockKey ?? null;
+    dto.blockName = user.blockName ?? null;
     dto.isActive = user.isActive;
     dto.lastLoginAt = user.lastLoginAt || null;
     return dto;
@@ -372,11 +647,22 @@ export class UsersService {
     dto.username = user.username;
     dto.displayName = user.displayName;
     dto.role = user.role;
-    dto.stateCode = user.stateCode;
-    dto.districtCode = user.districtCode;
+    dto.stateKey = user.stateKey ?? null;
+    dto.stateName = user.stateName ?? null;
+    dto.districtKey = user.districtKey ?? null;
+    dto.districtName = user.districtName ?? null;
+    dto.blockKey = user.blockKey ?? null;
+    dto.blockName = user.blockName ?? null;
+    dto.clusterKey = user.clusterKey ?? null;
+    dto.clusterName = user.clusterName ?? null;
+    dto.udiseCode = user.udiseCode ?? null;
+    dto.schoolName = user.schoolName ?? null;
     dto.phone = user.phone;
+    dto.mobileNumber = user.mobileNumber;
     dto.designation = user.designation;
     dto.department = user.department;
+    dto.userEmail = user.userEmail;
+    dto.contactEmail = user.contactEmail;
     dto.isActive = user.isActive;
     dto.isFirstLogin = user.isFirstLogin;
     dto.lastLoginAt = user.lastLoginAt || null;

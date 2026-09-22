@@ -8,6 +8,7 @@ import { CommonModule, createPostgresDataSource } from '@rvsk/common';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { RbacModule } from './rbac/rbac.module';
+import { MasterDataModule } from './master-data/master-data.module';
 import { VskModule } from './vsk/vsk.module';
 import { HomeModule } from './home/home.module';
 import { GalleryModule } from './gallery/gallery.module';
@@ -45,6 +46,7 @@ import { HealthController } from './health.controller';
     AuthModule,
     UsersModule,
     RbacModule,
+    MasterDataModule,
     VskModule,
     HomeModule,
     GalleryModule,
