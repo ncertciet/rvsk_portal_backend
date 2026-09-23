@@ -16,6 +16,7 @@ import { VskProfileDto } from './dto/vsk-profile.dto';
 import { VskPmuDto, PmuRoleDto } from './dto/vsk-pmu.dto';
 import { VskSoftwareDto, SoftwareItemDto } from './dto/vsk-software.dto';
 import { VskInfraDto } from './dto/vsk-infra.dto';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class VskService {
@@ -36,6 +37,7 @@ export class VskService {
     private readonly officerRepo: Repository<VskOfficerHistory>,
     @InjectRepository(VskCommitteeMember)
     private readonly committeeMemberRepo: Repository<VskCommitteeMember>,
+    private readonly auditService: AuditService,
   ) {}
 
   // ═══════════════════════════════════════════════════════════════
@@ -95,6 +97,30 @@ export class VskService {
       });
       entity = await this.profileRepo.save(entity);
     }
+
+    await this.auditService.recordAndLog(
+      {
+        entityName: 'VSK_PROFILE',
+        entityId: entity.id,
+        actionType: 'UPDATE',
+        userId: userId ?? null,
+        userName: userName ?? null,
+        userStateCode: stateCode,
+        newValues: {
+          submissionStatus: entity.submissionStatus,
+          city: entity.city,
+          pincode: entity.pincode,
+        },
+      },
+      {
+        module: 'VSK',
+        action: 'UPDATE',
+        description: `Updated VSK profile for state ${stateCode}`,
+        performedBy: userId ?? null,
+        entityId: entity.id,
+        stateCode,
+      },
+    );
 
     return this.mapProfileToDto(entity);
   }
@@ -341,7 +367,28 @@ export class VskService {
       isActive: dto.isActive ?? true,
       createdBy: userId,
     });
-    return this.officerRepo.save(entity);
+    const saved = await this.officerRepo.save(entity);
+
+    await this.auditService.recordAndLog(
+      {
+        entityName: 'VSK_OFFICER',
+        entityId: saved.id,
+        actionType: 'CREATE',
+        userId,
+        userStateCode: stateCode,
+        newValues: { name: saved.name, officerRole: saved.officerRole },
+      },
+      {
+        module: 'VSK',
+        action: 'CREATE',
+        description: `Added VSK officer "${saved.name}" (${saved.officerRole})`,
+        performedBy: userId,
+        entityId: saved.id,
+        stateCode,
+      },
+    );
+
+    return saved;
   }
 
   async appointNewOfficer(stateCode: string, dto: Partial<VskOfficerHistory>, userId: string): Promise<VskOfficerHistory> {
@@ -371,7 +418,28 @@ export class VskService {
       isActive: true,
       createdBy: userId,
     });
-    return this.officerRepo.save(entity);
+    const saved = await this.officerRepo.save(entity);
+
+    await this.auditService.recordAndLog(
+      {
+        entityName: 'VSK_OFFICER',
+        entityId: saved.id,
+        actionType: 'APPOINT',
+        userId,
+        userStateCode: stateCode,
+        newValues: { name: saved.name, officerRole: saved.officerRole },
+      },
+      {
+        module: 'VSK',
+        action: 'APPOINT',
+        description: `Appointed "${saved.name}" as ${saved.officerRole}`,
+        performedBy: userId,
+        entityId: saved.id,
+        stateCode,
+      },
+    );
+
+    return saved;
   }
 
   async typoCorrection(id: string, dto: Partial<VskOfficerHistory>, userId: string): Promise<VskOfficerHistory> {

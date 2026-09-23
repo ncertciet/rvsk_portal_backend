@@ -12,6 +12,8 @@ import { MasterDataModule } from './master-data/master-data.module';
 import { VskModule } from './vsk/vsk.module';
 import { HomeModule } from './home/home.module';
 import { GalleryModule } from './gallery/gallery.module';
+import { NotificationModule } from './notification/notification.module';
+import { AuditModule } from './audit/audit.module';
 
 // Grievance modules
 import { GrievanceModule } from './grievance/grievance.module';
@@ -42,6 +44,8 @@ import { HealthController } from './health.controller';
       }),
     }),
     CommonModule,
+    // Central audit + activity logging (global)
+    AuditModule,
     // Auth domain
     AuthModule,
     UsersModule,
@@ -50,6 +54,7 @@ import { HealthController } from './health.controller';
     VskModule,
     HomeModule,
     GalleryModule,
+    NotificationModule,
     // Grievance domain
     GrievanceModule,
     CategoriesModule,

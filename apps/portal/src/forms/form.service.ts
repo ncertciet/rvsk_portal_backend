@@ -3,16 +3,22 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { v4 as uuidv4 } from 'uuid';
 import { AppException, PageResponse } from '@rvsk/common';
+import { Logger } from '@nestjs/common';
 import { FormMaster } from './entities/form-master.entity';
 import { FormAssignment } from './entities/form-assignment.entity';
 import { FormQuestion } from '../questions/entities/form-question.entity';
+import { PortalUser } from '../auth/entities/portal-user.entity';
 import { FormCreateDto } from './dto/form-create.dto';
 import { PublishDto } from './dto/publish.dto';
 import { FormDetailResponse } from './dto/form-detail-response.dto';
 import { FormListResponse } from './dto/form-list-response.dto';
+import { NotificationService } from '../notification/notification.service';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class FormService {
+  private readonly logger = new Logger(FormService.name);
+
   constructor(
     @InjectRepository(FormMaster)
     private readonly formRepository: Repository<FormMaster>,
@@ -20,7 +26,55 @@ export class FormService {
     private readonly assignmentRepository: Repository<FormAssignment>,
     @InjectRepository(FormQuestion)
     private readonly questionRepository: Repository<FormQuestion>,
+    @InjectRepository(PortalUser)
+    private readonly userRepository: Repository<PortalUser>,
+    private readonly notificationService: NotificationService,
+    private readonly auditService: AuditService,
   ) {}
+
+  /**
+   * RVSK-NOTIFY-EMAIL-003 — notify each given state's users for a form event.
+   * Resolves state-level users (State_Admin/State_SPOC) by state_key and emits
+   * one notification per state. Non-blocking; per-state failures isolated.
+   */
+  private async notifyStates(
+    eventCode: string,
+    form: FormMaster,
+    stateKeys: string[],
+    refSuffix: string,
+  ): Promise<void> {
+    const dueClause = form.dueDate
+      ? ` (due ${new Date(form.dueDate).toISOString().slice(0, 10)})`
+      : '';
+    for (const stateKey of stateKeys) {
+      const users = await this.userRepository.find({
+        where: [
+          { stateKey, role: 'State_Admin', isActive: true },
+          { stateKey, role: 'State_SPOC', isActive: true },
+        ],
+      });
+      const stateName = users[0]?.stateName || `State ${stateKey}`;
+      for (const u of users) {
+        const to = u.contactEmail || u.userEmail || '';
+        if (!to) {
+          continue;
+        }
+        await this.notificationService.notify(eventCode, {
+          to,
+          referenceType: 'FORM',
+          referenceId: `${form.id}:${stateKey}:${refSuffix}`,
+          data: {
+            state_name: stateName,
+            form_title: form.title,
+            due_date: form.dueDate
+              ? new Date(form.dueDate).toISOString().slice(0, 10)
+              : '',
+            due_date_clause: dueClause,
+          },
+        });
+      }
+    }
+  }
 
   async createForm(request: FormCreateDto, userId: string): Promise<FormDetailResponse> {
     const form = new FormMaster();
@@ -33,6 +87,24 @@ export class FormService {
     form.createdBy = userId;
 
     const saved = await this.formRepository.save(form);
+
+    await this.auditService.recordAndLog(
+      {
+        entityName: 'FORM',
+        entityId: saved.id,
+        actionType: 'CREATE',
+        userId,
+        newValues: { title: saved.title, status: saved.status },
+      },
+      {
+        module: 'FORMS',
+        action: 'CREATE',
+        description: `Created form "${saved.title}"`,
+        performedBy: userId,
+        entityId: saved.id,
+      },
+    );
+
     return this.toDetailResponse(saved, 0);
   }
 
@@ -192,10 +264,29 @@ export class FormService {
       );
     }
 
+    const deletedTitle = form.title;
+
     // Delete questions first
     await this.questionRepository.delete({ formId: id });
     // Delete the form
     await this.formRepository.delete({ id });
+
+    await this.auditService.recordAndLog(
+      {
+        entityName: 'FORM',
+        entityId: id,
+        actionType: 'DELETE',
+        userId,
+        oldValues: { title: deletedTitle },
+      },
+      {
+        module: 'FORMS',
+        action: 'DELETE',
+        description: `Deleted draft form "${deletedTitle}"`,
+        performedBy: userId,
+        entityId: id,
+      },
+    );
   }
 
   async publishForm(
@@ -287,7 +378,75 @@ export class FormService {
       return savedForm;
     });
 
+    await this.auditService.recordAndLog(
+      {
+        entityName: 'FORM',
+        entityId: saved.id,
+        actionType: 'PUBLISH',
+        userId,
+        newValues: {
+          title: saved.title,
+          status: saved.status,
+          assignedStateKeys: uniqueKeys,
+        },
+      },
+      {
+        module: 'FORMS',
+        action: 'PUBLISH',
+        description: `Published form "${saved.title}" to ${uniqueKeys.length} state(s)`,
+        performedBy: userId,
+        entityId: saved.id,
+      },
+    );
+
+    // RVSK-NOTIFY-EMAIL-003: FORM_PUBLISHED_TO_STATE — one per assigned state.
+    await this.notifyStates(
+      'FORM_PUBLISHED_TO_STATE',
+      saved,
+      uniqueKeys,
+      'publish',
+    );
+
     return this.toDetailResponse(saved, questionCount);
+  }
+
+  /**
+   * RVSK-NOTIFY-EMAIL-003 — manual reminder (Super Admin / RVSK Admin) to every
+   * state whose submission is still PENDING for a published form.
+   */
+  async remind(
+    id: string,
+  ): Promise<{ success: boolean; message: string; remindedStates: number }> {
+    const form = await this.formRepository.findOne({ where: { id } });
+    if (!form) {
+      throw new AppException(
+        'Form not found',
+        HttpStatus.NOT_FOUND,
+        'FORM_NOT_FOUND',
+      );
+    }
+    if (form.status !== 'PUBLISHED') {
+      throw new AppException(
+        'Reminders can only be sent for a PUBLISHED form.',
+        HttpStatus.BAD_REQUEST,
+        'FORM_NOT_PUBLISHED',
+      );
+    }
+    const pending = await this.assignmentRepository.find({
+      where: { formId: id, submissionStatus: 'PENDING' },
+    });
+    const pendingKeys = pending.map((a) => String(a.stateKey));
+    await this.notifyStates(
+      'FORM_SUBMISSION_REMINDER',
+      form,
+      pendingKeys,
+      `remind:${Date.now()}`,
+    );
+    return {
+      success: true,
+      message: `Reminder dispatched to ${pendingKeys.length} pending state(s).`,
+      remindedStates: pendingKeys.length,
+    };
   }
 
   async closeForm(id: string, userId: string): Promise<FormDetailResponse> {
@@ -313,6 +472,23 @@ export class FormService {
     form.updatedBy = userId;
 
     const saved = await this.formRepository.save(form);
+
+    await this.auditService.recordAndLog(
+      {
+        entityName: 'FORM',
+        entityId: saved.id,
+        actionType: 'CLOSE',
+        userId,
+        newValues: { title: saved.title, status: saved.status },
+      },
+      {
+        module: 'FORMS',
+        action: 'CLOSE',
+        description: `Closed form "${saved.title}"`,
+        performedBy: userId,
+        entityId: saved.id,
+      },
+    );
 
     const questionCount = await this.questionRepository.count({
       where: { formId: id },

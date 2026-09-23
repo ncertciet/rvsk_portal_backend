@@ -5,6 +5,7 @@ import { Repository } from 'typeorm';
 import { PortalUser } from '../auth/entities/portal-user.entity';
 import { Grievance } from '../grievance/entities/grievance.entity';
 import { FormMaster } from '../forms/entities/form-master.entity';
+import { ActivityLogEntry } from '../audit/entities/activity-log.entity';
 
 export interface HomeData {
   // Super Admin fields
@@ -44,7 +45,47 @@ export class HomeService {
     private readonly grievanceRepo: Repository<Grievance>,
     @InjectRepository(FormMaster)
     private readonly formRepo: Repository<FormMaster>,
+    @InjectRepository(ActivityLogEntry)
+    private readonly activityRepo: Repository<ActivityLogEntry>,
   ) {}
+
+  /**
+   * Fetch the most recent activity-feed entries for the Super Admin / RVSK
+   * Admin dashboard. Unfiltered (all roles, all states), newest first, joined
+   * to portal_users to resolve a human-readable actor name.
+   * Non-blocking: returns [] on any failure so the dashboard still renders.
+   */
+  private async getRecentActivities(limit = 15): Promise<any[]> {
+    try {
+      const rows = await this.activityRepo
+        .createQueryBuilder('a')
+        .leftJoin(PortalUser, 'u', 'u.id = a.performedBy')
+        .select([
+          'a.id AS id',
+          'a.module AS module',
+          'a.action AS action',
+          'a.description AS description',
+          'a.performedBy AS "performedById"',
+          'a.performedAt AS "performedAt"',
+          'COALESCE(u.display_name, u.username) AS "performedBy"',
+        ])
+        .orderBy('a.performedAt', 'DESC')
+        .limit(limit)
+        .getRawMany();
+
+      return rows.map((r) => ({
+        id: r.id,
+        module: r.module,
+        action: r.action,
+        description: r.description,
+        performedBy: r.performedBy || 'System',
+        performedAt: r.performedAt,
+      }));
+    } catch (e: any) {
+      this.logger.warn(`Recent activity fetch failed: ${e?.message ?? e}`);
+      return [];
+    }
+  }
 
   /**
    * Get aggregated home page data for the dashboard.
@@ -91,12 +132,15 @@ export class HomeService {
       this.logger.warn(`Grievance count failed: ${e?.message}`);
     }
 
+    // Super Admin and RVSK Admin both see the global activity feed (all roles).
+    const recentActivities = await this.getRecentActivities();
+
     if (role === 'RVSK_Admin') {
       return {
         formsSent: totalForms,
         formsPublished,
         responsesReceived: 0,
-        recentActivities: [],
+        recentActivities,
       };
     }
 
@@ -105,7 +149,7 @@ export class HomeService {
       totalForms,
       totalGrievances,
       activeServices: 6,
-      recentActivities: [],
+      recentActivities,
     };
   }
 

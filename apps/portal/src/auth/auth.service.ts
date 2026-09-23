@@ -14,6 +14,7 @@ const HTTP_LOCKED = 423 as HttpStatus;
 import { PortalUser } from './entities/portal-user.entity';
 import { TokenService } from './jwt.service';
 import { PermissionServiceV2 } from '../rbac/permission.service';
+import { NotificationService } from '../notification/notification.service';
 import {
   LoginDto,
   LoginResponse,
@@ -75,6 +76,7 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly httpService: HttpService,
     private readonly permissionServiceV2: PermissionServiceV2,
+    private readonly notificationService: NotificationService,
   ) {
     this.maxFailedAttempts = parseInt(String(this.configService.get('MAX_FAILED_ATTEMPTS', 5)), 10) || 5;
     this.lockoutDurationMinutes = parseInt(String(this.configService.get('LOCKOUT_DURATION_MINUTES', 15)), 10) || 15;
@@ -264,6 +266,9 @@ export class AuthService {
     await this.userRepo.save(user);
 
     this.logger.log(`Password changed for user: ${username}`);
+
+    // RVSK-NOTIFY-EMAIL-003: PASSWORD_CHANGED (self-service confirmation).
+    await this.notifyUser('PASSWORD_CHANGED', user);
   }
 
   // ==================== RESET PASSWORD (Admin) ====================
@@ -288,6 +293,9 @@ export class AuthService {
     await this.userRepo.save(user);
 
     this.logger.log(`Password reset by admin for user: ${user.username}`);
+
+    // RVSK-NOTIFY-EMAIL-003: PASSWORD_RESET (admin-initiated by Super/RVSK Admin).
+    await this.notifyUser('PASSWORD_RESET', user);
   }
 
   // ==================== LOGOUT ====================
@@ -514,22 +522,54 @@ export class AuthService {
   }
 
   /**
+   * Fire a user-targeted notification (non-blocking). RVSK-NOTIFY-EMAIL-003.
+   */
+  private async notifyUser(
+    eventCode: string,
+    user: PortalUser,
+    extraData: Record<string, unknown> = {},
+  ): Promise<void> {
+    const to = user.contactEmail || user.userEmail || '';
+    if (!to) {
+      return;
+    }
+    await this.notificationService.notify(eventCode, {
+      to,
+      referenceType: 'USER',
+      referenceId: `${user.id}:${Date.now()}`,
+      data: {
+        user_name: user.displayName || user.username,
+        user_id: user.username,
+        role_name: user.role,
+        ...extraData,
+      },
+    });
+  }
+
+  /**
    * Handle a failed login attempt: increment counter, lock if threshold reached.
    */
   private async handleFailedAttempt(user: PortalUser): Promise<void> {
     const attempts = (user.failedAttempts || 0) + 1;
     user.failedAttempts = attempts;
 
+    let justLocked = false;
     if (attempts >= this.maxFailedAttempts) {
       const lockUntil = new Date();
       lockUntil.setMinutes(lockUntil.getMinutes() + this.lockoutDurationMinutes);
       user.lockedUntil = lockUntil;
+      justLocked = true;
       this.logger.warn(
         `Account locked for user: ${user.username} after ${attempts} failed attempts`,
       );
     }
 
     await this.userRepo.save(user);
+
+    // RVSK-NOTIFY-EMAIL-003: USER_ACCOUNT_LOCKED (security alert) when locked.
+    if (justLocked) {
+      await this.notifyUser('USER_ACCOUNT_LOCKED', user);
+    }
   }
 
   /**

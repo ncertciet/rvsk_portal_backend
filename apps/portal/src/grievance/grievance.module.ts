@@ -9,6 +9,7 @@ import { GrievanceService } from './grievance.service';
 import { GrievanceController } from './grievance.controller';
 import { CategoriesModule } from '../categories/categories.module';
 import { GrievanceAttachmentsModule } from '../grievance-attachments/grievance-attachments.module';
+import { NotificationModule } from '../notification/notification.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { GrievanceAttachmentsModule } from '../grievance-attachments/grievance-a
     ]),
     CategoriesModule,
     GrievanceAttachmentsModule,
+    NotificationModule,
   ],
   controllers: [GrievanceController],
   providers: [GrievanceService],

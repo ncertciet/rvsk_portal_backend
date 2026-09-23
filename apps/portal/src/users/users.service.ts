@@ -15,6 +15,8 @@ import {
   UserProfileDto,
 } from './dto/user-list.dto';
 import { MasterDataService } from '../master-data/master-data.service';
+import { NotificationService } from '../notification/notification.service';
+import { AuditService } from '../audit/audit.service';
 import {
   canCreateRole,
   geoLevelForRole,
@@ -54,6 +56,8 @@ export class UsersService {
     private readonly userRepo: Repository<PortalUser>,
     private readonly configService: ConfigService,
     private readonly masterDataService: MasterDataService,
+    private readonly notificationService: NotificationService,
+    private readonly auditService: AuditService,
   ) {
     // ConfigService returns env values as strings; bcrypt.hash needs a numeric
     // salt-rounds value, so coerce explicitly (a string like "10" is otherwise
@@ -358,6 +362,33 @@ export class UsersService {
       `User created: ${savedUser.username} with role: ${savedUser.role} by admin: ${createdBy}`,
     );
 
+    // Audit trail + dashboard feed (non-blocking).
+    await this.auditService.recordAndLog(
+      {
+        entityName: 'USER',
+        entityId: savedUser.id,
+        actionType: 'CREATE',
+        userId: createdBy,
+        newValues: {
+          username: savedUser.username,
+          displayName: savedUser.displayName,
+          role: savedUser.role,
+          stateName: savedUser.stateName,
+        },
+      },
+      {
+        module: 'USERS',
+        action: 'CREATE',
+        description: `Created ${savedUser.role} user "${savedUser.displayName || savedUser.username}"`,
+        performedBy: createdBy,
+        entityId: savedUser.id,
+        stateCode: savedUser.stateName ?? null,
+      },
+    );
+
+    // RVSK-NOTIFY-EMAIL-003: USER_CREATED (non-blocking; response unchanged).
+    await this.notifyUser('USER_CREATED', savedUser);
+
     return {
       success: true,
       message: 'User created successfully. Share credentials securely.',
@@ -371,7 +402,11 @@ export class UsersService {
   /**
    * Update allowed fields: displayName, role, stateCode, districtCode, phone, email, etc.
    */
-  async updateUser(id: string, dto: UpdateUserDto): Promise<UserListDto> {
+  async updateUser(
+    id: string,
+    dto: UpdateUserDto,
+    performedBy?: string,
+  ): Promise<UserListDto> {
     const user = await this.userRepo.findOne({ where: { id } });
 
     if (!user) {
@@ -382,7 +417,20 @@ export class UsersService {
       );
     }
 
+    // Snapshot for the audit trail before mutation.
+    const before = {
+      displayName: user.displayName,
+      role: user.role,
+      stateName: user.stateName,
+      districtName: user.districtName,
+      blockName: user.blockName,
+      phone: user.phone,
+      contactEmail: user.contactEmail,
+    };
+
     if (dto.displayName !== undefined) user.displayName = dto.displayName;
+
+    const previousRole = user.role;
 
     // The effective role after this edit determines geo requirements.
     const effectiveRole = dto.role !== undefined ? dto.role : user.role;
@@ -433,6 +481,46 @@ export class UsersService {
     const savedUser = await this.userRepo.save(user);
     this.logger.log(`User edited: ${savedUser.username}`);
 
+    const roleChangedNow = savedUser.role !== previousRole;
+
+    // Audit trail (always) + dashboard feed. A role change gets a dedicated,
+    // more prominent feed line; otherwise a generic "updated" line.
+    await this.auditService.record({
+      entityName: 'USER',
+      entityId: savedUser.id,
+      actionType: roleChangedNow ? 'ROLE_CHANGE' : 'UPDATE',
+      userId: performedBy ?? null,
+      oldValues: before,
+      newValues: {
+        displayName: savedUser.displayName,
+        role: savedUser.role,
+        stateName: savedUser.stateName,
+        districtName: savedUser.districtName,
+        blockName: savedUser.blockName,
+        phone: savedUser.phone,
+        contactEmail: savedUser.contactEmail,
+      },
+    });
+    if (performedBy) {
+      await this.auditService.log({
+        module: 'USERS',
+        action: roleChangedNow ? 'ROLE_CHANGE' : 'UPDATE',
+        description: roleChangedNow
+          ? `Changed role of "${savedUser.displayName || savedUser.username}" from ${previousRole} to ${savedUser.role}`
+          : `Updated user "${savedUser.displayName || savedUser.username}"`,
+        performedBy,
+        entityId: savedUser.id,
+        stateCode: savedUser.stateName ?? null,
+      });
+    }
+
+    // RVSK-NOTIFY-EMAIL-003: USER_ROLE_CHANGED only when the role actually changed.
+    if (roleChangedNow) {
+      await this.notifyUser('USER_ROLE_CHANGED', savedUser, {
+        old_role: previousRole,
+      });
+    }
+
     return this.toUserListDto(savedUser);
   }
 
@@ -457,12 +545,78 @@ export class UsersService {
     }
   }
 
+  // ==================== NOTIFICATION HELPER ====================
+
+  /**
+   * Fire a user-lifecycle notification (non-blocking). Recipient is the user's
+   * contact_email (fallback user_email). Never throws.
+   */
+  private async notifyUser(
+    eventCode: string,
+    user: PortalUser,
+    extraData: Record<string, unknown> = {},
+    opts: { repeatable?: boolean } = {},
+  ): Promise<void> {
+    const to = user.contactEmail || user.userEmail || '';
+    if (!to) {
+      return;
+    }
+    // Idempotent one-time events (e.g. USER_CREATED) dedupe on the user id.
+    // Repeatable transitions (activate/deactivate/reset/unlock) get a unique
+    // reference so each occurrence is allowed to send.
+    const referenceId = opts.repeatable
+      ? `${user.id}:${Date.now()}`
+      : user.id;
+    await this.notificationService.notify(eventCode, {
+      to,
+      referenceType: 'USER',
+      referenceId,
+      data: {
+        user_name: user.displayName || user.username,
+        user_id: user.username,
+        role_name: user.role,
+        ...extraData,
+      },
+    });
+  }
+
+  // ==================== AUDIT HELPER ====================
+
+  /**
+   * Record a user lifecycle action to the audit trail + dashboard feed
+   * (non-blocking). `action` is a short verb (DEACTIVATE, ACTIVATE, ...).
+   */
+  private async auditUserLifecycle(
+    user: PortalUser,
+    action: string,
+    verbPhrase: string,
+    performedBy?: string,
+  ): Promise<void> {
+    await this.auditService.record({
+      entityName: 'USER',
+      entityId: user.id,
+      actionType: action,
+      userId: performedBy ?? null,
+      newValues: { isActive: user.isActive },
+    });
+    if (performedBy) {
+      await this.auditService.log({
+        module: 'USERS',
+        action,
+        description: `${verbPhrase} user "${user.displayName || user.username}"`,
+        performedBy,
+        entityId: user.id,
+        stateCode: user.stateName ?? null,
+      });
+    }
+  }
+
   // ==================== DELETE USER ====================
 
   /**
    * Soft-delete: set isActive=false.
    */
-  async deleteUser(id: string): Promise<void> {
+  async deleteUser(id: string, performedBy?: string): Promise<void> {
     const user = await this.userRepo.findOne({ where: { id } });
 
     if (!user) {
@@ -476,6 +630,8 @@ export class UsersService {
     user.isActive = false;
     await this.userRepo.save(user);
     this.logger.log(`User soft-deleted (deactivated): ${user.username}`);
+
+    await this.auditUserLifecycle(user, 'DEACTIVATE', 'Deactivated', performedBy);
   }
 
   // ==================== ACTIVATE USER ====================
@@ -483,7 +639,7 @@ export class UsersService {
   /**
    * Set isActive=true.
    */
-  async activateUser(id: string): Promise<{ success: boolean; isActive: boolean; message: string }> {
+  async activateUser(id: string, performedBy?: string): Promise<{ success: boolean; isActive: boolean; message: string }> {
     const user = await this.userRepo.findOne({ where: { id } });
 
     if (!user) {
@@ -498,6 +654,10 @@ export class UsersService {
     await this.userRepo.save(user);
     this.logger.log(`User ${user.username} is now ACTIVE`);
 
+    await this.notifyUser('USER_ACTIVATED', user, {}, { repeatable: true });
+
+    await this.auditUserLifecycle(user, 'ACTIVATE', 'Activated', performedBy);
+
     return { success: true, isActive: true, message: 'User activated' };
   }
 
@@ -506,7 +666,7 @@ export class UsersService {
   /**
    * Set isActive=false.
    */
-  async deactivateUser(id: string): Promise<{ success: boolean; isActive: boolean; message: string }> {
+  async deactivateUser(id: string, performedBy?: string): Promise<{ success: boolean; isActive: boolean; message: string }> {
     const user = await this.userRepo.findOne({ where: { id } });
 
     if (!user) {
@@ -521,6 +681,10 @@ export class UsersService {
     await this.userRepo.save(user);
     this.logger.log(`User ${user.username} is now INACTIVE`);
 
+    await this.notifyUser('USER_DEACTIVATED', user, {}, { repeatable: true });
+
+    await this.auditUserLifecycle(user, 'DEACTIVATE', 'Deactivated', performedBy);
+
     return { success: true, isActive: false, message: 'User deactivated' };
   }
 
@@ -529,7 +693,7 @@ export class UsersService {
   /**
    * Toggle active/inactive status (matches Java API contract).
    */
-  async toggleActive(id: string): Promise<{ success: boolean; isActive: boolean; message: string }> {
+  async toggleActive(id: string, performedBy?: string): Promise<{ success: boolean; isActive: boolean; message: string }> {
     const user = await this.userRepo.findOne({ where: { id } });
 
     if (!user) {
@@ -544,6 +708,20 @@ export class UsersService {
     user.isActive = !currentActive;
     await this.userRepo.save(user);
     this.logger.log(`User ${user.username} is now ${user.isActive ? 'ACTIVE' : 'INACTIVE'}`);
+
+    await this.notifyUser(
+      user.isActive ? 'USER_ACTIVATED' : 'USER_DEACTIVATED',
+      user,
+      {},
+      { repeatable: true },
+    );
+
+    await this.auditUserLifecycle(
+      user,
+      user.isActive ? 'ACTIVATE' : 'DEACTIVATE',
+      user.isActive ? 'Activated' : 'Deactivated',
+      performedBy,
+    );
 
     return {
       success: true,
@@ -577,6 +755,9 @@ export class UsersService {
     await this.userRepo.save(user);
     this.logger.log(`Password reset for user: ${user.username}`);
 
+    // RVSK-NOTIFY-EMAIL-003: PASSWORD_RESET (admin-initiated).
+    await this.notifyUser('PASSWORD_RESET', user, {}, { repeatable: true });
+
     return {
       success: true,
       message: 'Password reset. User must change on next login.',
@@ -604,6 +785,8 @@ export class UsersService {
     user.lockedUntil = null;
     await this.userRepo.save(user);
     this.logger.log(`Account unlocked for user: ${user.username}`);
+
+    await this.notifyUser('USER_ACCOUNT_UNLOCKED', user, {}, { repeatable: true });
 
     return { success: true, message: 'Account unlocked' };
   }

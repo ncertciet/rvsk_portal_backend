@@ -6,6 +6,7 @@ import { AppException } from '@rvsk/common';
 import { UsersService } from './users.service';
 import { PortalUser } from '../auth/entities/portal-user.entity';
 import { MasterDataService } from '../master-data/master-data.service';
+import { NotificationService } from '../notification/notification.service';
 import { CreateUserDto } from './dto/create-user.dto';
 
 /**
@@ -62,6 +63,10 @@ describe('UsersService', () => {
         { provide: getRepositoryToken(PortalUser), useValue: repo },
         { provide: ConfigService, useValue: { get: () => 10 } },
         { provide: MasterDataService, useValue: master },
+        {
+          provide: NotificationService,
+          useValue: { notify: jest.fn().mockResolvedValue(undefined) },
+        },
       ],
     }).compile();
 
@@ -256,6 +261,10 @@ describe('UsersService', () => {
           { provide: getRepositoryToken(PortalUser), useValue: repo },
           { provide: ConfigService, useValue: { get: () => '10' } }, // string!
           { provide: MasterDataService, useValue: master },
+          {
+            provide: NotificationService,
+            useValue: { notify: jest.fn().mockResolvedValue(undefined) },
+          },
         ],
       }).compile();
       const svc = stringConfigModule.get(UsersService);

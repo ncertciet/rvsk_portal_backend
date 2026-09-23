@@ -8,7 +8,7 @@ import {
   HttpStatus,
   UseGuards,
 } from '@nestjs/common';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
 import {
   Public,
   Roles,
@@ -17,6 +17,11 @@ import {
   AppException,
 } from '@rvsk/common';
 import { AuthService, UserResponse, ProfileResponse } from './auth.service';
+import {
+  PasswordResetService,
+  GenericAck,
+  VerifyOtpResult,
+} from './password-reset.service';
 import { TokenService } from './jwt.service';
 import {
   LoginDto,
@@ -25,6 +30,10 @@ import {
   ChangePasswordDto,
   ResetPasswordDto,
   UpdateProfileDto,
+  RequestOtpDto,
+  VerifyOtpDto,
+  ResendOtpDto,
+  ResetWithTokenDto,
 } from './dto';
 
 @UseGuards(ThrottlerGuard)
@@ -32,6 +41,7 @@ import {
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
+    private readonly passwordResetService: PasswordResetService,
     private readonly tokenService: TokenService,
   ) {}
 
@@ -63,6 +73,42 @@ export class AuthController {
   @HttpCode(200)
   async resetPassword(@Body() dto: ResetPasswordDto): Promise<void> {
     return this.authService.resetPassword(dto);
+  }
+
+  // ==================== Forgot-password OTP (RVSK-AUTH-PWDRESET-004) ====================
+  // All public + rate-limited. Backend is authoritative for expiry, cooldown,
+  // attempt-cap and single-use; request/resend are anti-enumeration.
+
+  @Public()
+  @Throttle({ auth: { ttl: 60000, limit: 5 } })
+  @Post('forgot-password/request-otp')
+  @HttpCode(200)
+  async requestOtp(@Body() dto: RequestOtpDto): Promise<GenericAck> {
+    return this.passwordResetService.requestOtp(dto);
+  }
+
+  @Public()
+  @Throttle({ auth: { ttl: 60000, limit: 10 } })
+  @Post('forgot-password/verify-otp')
+  @HttpCode(200)
+  async verifyOtp(@Body() dto: VerifyOtpDto): Promise<VerifyOtpResult> {
+    return this.passwordResetService.verifyOtp(dto);
+  }
+
+  @Public()
+  @Throttle({ auth: { ttl: 60000, limit: 5 } })
+  @Post('forgot-password/resend-otp')
+  @HttpCode(200)
+  async resendOtp(@Body() dto: ResendOtpDto): Promise<GenericAck> {
+    return this.passwordResetService.resendOtp(dto);
+  }
+
+  @Public()
+  @Throttle({ auth: { ttl: 60000, limit: 10 } })
+  @Post('forgot-password/reset')
+  @HttpCode(200)
+  async resetWithToken(@Body() dto: ResetWithTokenDto): Promise<void> {
+    return this.passwordResetService.reset(dto);
   }
 
   @Post('logout')

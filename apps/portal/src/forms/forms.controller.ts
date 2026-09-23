@@ -130,6 +130,16 @@ export class FormsController {
     return this.formService.closeForm(id, user.userId);
   }
 
+  /**
+   * POST /api/v1/forms/:id/remind — Send a submission reminder to states whose
+   * submission is still PENDING (Super Admin / RVSK Admin). RVSK-NOTIFY-EMAIL-003.
+   */
+  @Roles('Super_Admin', 'RVSK_Admin')
+  @Post(':id/remind')
+  async remindForm(@Param('id') id: string) {
+    return this.formService.remind(id);
+  }
+
   // ─── Questions ──────────────────────────────────────────────────────────────
 
   /**

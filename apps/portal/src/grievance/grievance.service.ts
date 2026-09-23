@@ -7,6 +7,8 @@ import { Grievance } from './entities/grievance.entity';
 import { GrievanceResponse } from './entities/grievance-response.entity';
 import { GrievanceHistory } from './entities/grievance-history.entity';
 import { PortalUser } from '../auth/entities/portal-user.entity';
+import { NotificationService } from '../notification/notification.service';
+import { AuditService } from '../audit/audit.service';
 
 @Injectable()
 export class GrievanceService {
@@ -33,7 +35,28 @@ export class GrievanceService {
     private readonly historyRepo: Repository<GrievanceHistory>,
     @InjectRepository(PortalUser)
     private readonly userRepo: Repository<PortalUser>,
+    private readonly notificationService: NotificationService,
+    private readonly auditService: AuditService,
   ) {}
+
+  /** Resolve a user's notification email (contact_email fallback user_email). */
+  private async emailForUser(userId: string | null): Promise<{
+    email: string;
+    name: string;
+  } | null> {
+    if (!userId) {
+      return null;
+    }
+    const u = await this.userRepo.findOne({ where: { id: userId } });
+    if (!u) {
+      return null;
+    }
+    const email = u.contactEmail || u.userEmail || '';
+    if (!email) {
+      return null;
+    }
+    return { email, name: u.displayName || u.username };
+  }
 
   /**
    * Creates a new grievance with auto-generated ID and optional auto-assignment to RVSK_SPOC.
@@ -100,6 +123,55 @@ export class GrievanceService {
       await this.historyRepo.save(history);
     } catch (err: any) {
       this.logger.warn(`Failed to save grievance history: ${err?.message || err}. Grievance was created successfully.`);
+    }
+
+    // Audit trail + dashboard feed (non-blocking).
+    await this.auditService.recordAndLog(
+      {
+        entityName: 'GRIEVANCE',
+        entityId: saved.id,
+        actionType: 'CREATE',
+        userId,
+        userStateCode: stateCode,
+        newValues: {
+          grievanceId: saved.grievanceId,
+          category: saved.category,
+          status: saved.status,
+        },
+      },
+      {
+        module: 'GRIEVANCES',
+        action: 'CREATE',
+        description: `Grievance ${saved.grievanceId} created`,
+        performedBy: userId,
+        entityId: saved.id,
+        stateCode,
+      },
+    );
+
+    // RVSK-NOTIFY-EMAIL-003: notify the assigned SPOC (non-blocking).
+    if (spoc) {
+      const spocEmail = spoc.contactEmail || spoc.userEmail || '';
+      if (spocEmail) {
+        const data = {
+          spoc_name: spoc.displayName || spoc.username,
+          grievance_id: saved.grievanceId,
+          grievance_subject: saved.subject,
+          state_name: spoc.stateName || stateCode,
+        };
+        await this.notificationService.notify('GRIEVANCE_CREATED', {
+          to: spocEmail,
+          referenceType: 'GRIEVANCE',
+          referenceId: saved.id,
+          data,
+        });
+        await this.notificationService.notify('GRIEVANCE_ASSIGNED_TO_SPOC', {
+          to: spocEmail,
+          referenceType: 'GRIEVANCE',
+          referenceId: saved.id,
+          data,
+        });
+      }
     }
 
     return {
@@ -313,6 +385,27 @@ export class GrievanceService {
     history.performedBy = userId;
     await this.historyRepo.save(history);
 
+    const isAssign = newStatus === 'ASSIGNED';
+    await this.auditService.recordAndLog(
+      {
+        entityName: 'GRIEVANCE',
+        entityId: id,
+        actionType: isAssign ? 'ASSIGN' : 'STATUS_CHANGE',
+        userId,
+        userStateCode: grievance.stateCode,
+        oldValues: { status: grievance.status },
+        newValues: { status: newStatus },
+      },
+      {
+        module: 'GRIEVANCES',
+        action: isAssign ? 'ASSIGN' : 'STATUS_CHANGE',
+        description: `Grievance ${grievance.grievanceId} status changed to ${newStatus}`,
+        performedBy: userId,
+        entityId: id,
+        stateCode: grievance.stateCode,
+      },
+    );
+
     this.logger.log(`Grievance ${grievance.grievanceId} status changed to ${newStatus} by ${userId}`);
     return saved;
   }
@@ -417,6 +510,22 @@ export class GrievanceService {
     await this.historyRepo.save(history);
 
     this.logger.log(`Grievance ${grievance.grievanceId} reopened by ${userId}`);
+
+    // RVSK-NOTIFY-EMAIL-003: GRIEVANCE_REOPENED → assigned SPOC.
+    const spoc = await this.emailForUser(saved.assignedTo ?? null);
+    if (spoc) {
+      await this.notificationService.notify('GRIEVANCE_REOPENED', {
+        to: spoc.email,
+        referenceType: 'GRIEVANCE',
+        referenceId: `${saved.id}:reopen:${Date.now()}`,
+        data: {
+          spoc_name: spoc.name,
+          grievance_id: saved.grievanceId,
+          grievance_subject: saved.subject,
+        },
+      });
+    }
+
     return saved;
   }
 
@@ -460,7 +569,43 @@ export class GrievanceService {
     history.performedBy = userId;
     await this.historyRepo.save(history);
 
+    await this.auditService.recordAndLog(
+      {
+        entityName: 'GRIEVANCE',
+        entityId: id,
+        actionType: 'CLOSE',
+        userId,
+        userStateCode: grievance.stateCode,
+        oldValues: { status: 'RESPONSE_PROVIDED' },
+        newValues: { status: 'CLOSED', resolvedAt: saved.resolvedAt },
+      },
+      {
+        module: 'GRIEVANCES',
+        action: 'CLOSE',
+        description: `Grievance ${grievance.grievanceId} closed`,
+        performedBy: userId,
+        entityId: id,
+        stateCode: grievance.stateCode,
+      },
+    );
+
     this.logger.log(`Grievance ${grievance.grievanceId} closed by ${userId}`);
+
+    // RVSK-NOTIFY-EMAIL-003: GRIEVANCE_CLOSED → grievance creator.
+    const creator = await this.emailForUser(saved.createdBy ?? null);
+    if (creator) {
+      await this.notificationService.notify('GRIEVANCE_CLOSED', {
+        to: creator.email,
+        referenceType: 'GRIEVANCE',
+        referenceId: `${saved.id}:close:${Date.now()}`,
+        data: {
+          user_name: creator.name,
+          grievance_id: saved.grievanceId,
+          grievance_subject: saved.subject,
+        },
+      });
+    }
+
     return saved;
   }
 

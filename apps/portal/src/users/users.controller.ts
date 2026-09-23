@@ -80,8 +80,9 @@ export class UsersController {
   async updateUser(
     @Param('id') id: string,
     @Body() dto: UpdateUserDto,
+    @CurrentUser() user: AuthenticatedUser,
   ): Promise<UserListDto> {
-    return this.usersService.updateUser(id, dto);
+    return this.usersService.updateUser(id, dto, user?.userId);
   }
 
   /**
@@ -89,8 +90,11 @@ export class UsersController {
    */
   @Roles('Super_Admin')
   @Delete(':id')
-  async deleteUser(@Param('id') id: string): Promise<void> {
-    return this.usersService.deleteUser(id);
+  async deleteUser(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<void> {
+    return this.usersService.deleteUser(id, user?.userId);
   }
 
   /**
@@ -122,8 +126,9 @@ export class UsersController {
   @Put(':id/toggle-active')
   async toggleActive(
     @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
   ): Promise<{ success: boolean; isActive: boolean; message: string }> {
-    return this.usersService.toggleActive(id);
+    return this.usersService.toggleActive(id, user?.userId);
   }
 
   /**
@@ -133,8 +138,9 @@ export class UsersController {
   @Put(':id/activate')
   async activateUser(
     @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
   ): Promise<{ success: boolean; isActive: boolean; message: string }> {
-    return this.usersService.activateUser(id);
+    return this.usersService.activateUser(id, user?.userId);
   }
 
   /**
@@ -144,7 +150,8 @@ export class UsersController {
   @Put(':id/deactivate')
   async deactivateUser(
     @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
   ): Promise<{ success: boolean; isActive: boolean; message: string }> {
-    return this.usersService.deactivateUser(id);
+    return this.usersService.deactivateUser(id, user?.userId);
   }
 }
