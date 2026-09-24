@@ -27,7 +27,6 @@ ENV NODE_ENV=development
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/wallet ./wallet
 
 EXPOSE 8091
 
@@ -46,7 +45,6 @@ ENV NODE_ENV=development
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/wallet ./wallet
 
 EXPOSE 8083
 
@@ -65,7 +63,6 @@ ENV NODE_ENV=development
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/wallet ./wallet
 
 EXPOSE 8082
 
