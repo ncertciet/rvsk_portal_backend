@@ -100,16 +100,48 @@ interface MvDataQualityRow {
 
 @Injectable()
 export class AccreditationService {
-  /** Oracle ADW schema holding the accreditation MVs and reference tables. */
-  private readonly accrSchema: string;
+  /**
+   * Single ADW schema (RVSK6A_SCHEMA = RVSK_DEV_APP) that holds BOTH the
+   * accreditation MVs (MV_DASH_*) AND the shared filter-master views
+   * (VW_STATE_MASTER, ...). This is the one schema used across every RVSK
+   * dashboard (attendance, assessment, administration, accreditation), so all
+   * dashboards resolve filters from the same canonical master.
+   */
+  private readonly schema: string;
 
   constructor(
     // Default (Oracle ADW) DataSource — same as AttendanceService.
     private readonly dataSource: DataSource,
     private readonly configService: ConfigService,
   ) {
-    // Configurable via ACCR_SCHEMA in .env.local; falls back to the ADW schema.
-    this.accrSchema = this.configService.get<string>('ACCR_SCHEMA', 'RTIWARI');
+    this.schema = this.configService.get<string>('RVSK6A_SCHEMA', 'RVSK6A');
+  }
+
+  /**
+   * Builds the optional state filter for a KPI query.
+   *
+   * The frontend/JWT carry the numeric ADW STATE_KEY (VW_STATE_MASTER), but the
+   * accreditation MVs are keyed on the business STATE_CODE. So we translate at
+   * query time: filter the MV where its state_code matches the STATE_ID that
+   * VW_STATE_MASTER maps the given STATE_KEY to. No MV rebuild needed.
+   *
+   * @param stateKey  numeric key (as string) or 'ALL'/undefined for national
+   * @param alias     table alias the MV state_code column lives under ('' = none)
+   * @param bindIndex the Oracle bind position to use (e.g. 2 -> :2)
+   * @returns { clause, bind } — clause is '' for national scope.
+   */
+  private buildStateFilter(
+    stateKey: string | undefined,
+    alias: string,
+    bindIndex: number,
+  ): { clause: string; bind: string[] } {
+    if (!stateKey || stateKey === 'ALL') {
+      return { clause: '', bind: [] };
+    }
+    const col = alias ? `${alias}.state_code` : 'state_code';
+    // Translate STATE_KEY -> STATE_CODE (= VW_STATE_MASTER.STATE_ID) inline.
+    const clause = ` AND ${col} = (SELECT STATE_ID FROM ${this.schema}.VW_STATE_MASTER WHERE STATE_KEY = :${bindIndex})`;
+    return { clause, bind: [stateKey] };
   }
 
   /**
@@ -122,7 +154,7 @@ export class AccreditationService {
     // years that actually have data). "Current" = the most recent year.
     const result = await this.dataSource.query(
       `SELECT academic_year
-       FROM ${this.accrSchema}.mv_dash_coverage_reach
+       FROM ${this.schema}.mv_dash_coverage_reach
        WHERE academic_year IS NOT NULL
        GROUP BY academic_year
        ORDER BY academic_year DESC
@@ -131,7 +163,7 @@ export class AccreditationService {
     if (result.length === 0) {
       throw new AppException(
         'ACCR_NO_DATA',
-        `No academic year data found in ${this.accrSchema} dashboard views`,
+        `No academic year data found in ${this.schema} dashboard views`,
       );
     }
     return result[0].academic_year ?? result[0].ACADEMIC_YEAR;
@@ -150,9 +182,9 @@ export class AccreditationService {
     filters: DashboardFiltersDto,
   ): Promise<KpiEnvelope<ProgrammeFrameworkResponse>> {
     const academicYear = filters.academicYear || (await this.getCurrentYear());
-    const stateCode = filters.stateCode || 'ALL';
+    const stateKey = filters.stateKey || 'ALL';
 
-    // Build query with optional state_code filter.
+    // Build query with optional state filter.
     // Oracle returns unquoted identifiers UPPERCASE, so every column is aliased
     // with a quoted lower_snake_case name matching the row interface.
     let query = `SELECT state_code            AS "state_code",
@@ -162,13 +194,14 @@ export class AccreditationService {
                         school_standard_authority_name AS "school_standard_authority_name",
                         accreditation_model_label AS "accreditation_model_label",
                         schools_on_this_model AS "schools_on_this_model"
-                 FROM ${this.accrSchema}.mv_dash_programme_framework
+                 FROM ${this.schema}.mv_dash_programme_framework
                  WHERE academic_year = :1`;
     const params: (string | number)[] = [academicYear];
 
-    if (stateCode !== 'ALL') {
-      query += ` AND state_code = :2`;
-      params.push(stateCode);
+    {
+      const sf = this.buildStateFilter(stateKey, '', 2);
+      query += sf.clause;
+      params.push(...sf.bind);
     }
 
     const rows: MvProgrammeFrameworkRow[] = await this.dataSource.query(query, params);
@@ -221,8 +254,8 @@ export class AccreditationService {
       title: 'Programme Infrastructure & Framework',
       as_of: new Date().toISOString(),
       filters: {
-        stateCode: stateCode,
-        academicYear: academicYear,
+        stateKey,
+        academicYear,
       },
       data: {
         kpi_1: {
@@ -254,9 +287,9 @@ export class AccreditationService {
     filters: DashboardFiltersDto,
   ): Promise<KpiEnvelope<CoverageReachResponse>> {
     const academicYear = filters.academicYear || (await this.getCurrentYear());
-    const stateCode = filters.stateCode || 'ALL';
+    const stateKey = filters.stateKey || 'ALL';
 
-    // Build query with optional state_code filter
+    // Build query with optional state filter (stateKey -> state_code translation)
     let query = `SELECT state_code            AS "state_code",
                         academic_year         AS "academic_year",
                         schools_accredited    AS "schools_accredited",
@@ -267,14 +300,13 @@ export class AccreditationService {
                         round_2               AS "round_2",
                         round_3_plus          AS "round_3_plus",
                         avg_rounds_per_school AS "avg_rounds_per_school"
-                 FROM ${this.accrSchema}.mv_dash_coverage_reach
+                 FROM ${this.schema}.mv_dash_coverage_reach
                  WHERE academic_year = :1`;
     const params: (string | number)[] = [academicYear];
 
-    if (stateCode !== 'ALL') {
-      query += ` AND state_code = :2`;
-      params.push(stateCode);
-    }
+    const sf = this.buildStateFilter(stateKey, '', 2);
+    query += sf.clause;
+    params.push(...sf.bind);
 
     const rows: MvCoverageReachRow[] = await this.dataSource.query(query, params);
 
@@ -312,7 +344,7 @@ export class AccreditationService {
       title: 'Coverage & Reach',
       as_of: new Date().toISOString(),
       filters: {
-        stateCode,
+        stateKey,
         academicYear,
       },
       data: {
@@ -366,7 +398,7 @@ export class AccreditationService {
               domain_weightage AS "domain_weightage",
               states_assessing AS "states_assessing",
               avg_score        AS "avg_score"
-       FROM ${this.accrSchema}.mv_dash_domain_components
+       FROM ${this.schema}.mv_dash_domain_components
        WHERE academic_year = :1`,
       [academicYear],
     );
@@ -391,7 +423,7 @@ export class AccreditationService {
       title: 'Domain Components',
       as_of: new Date().toISOString(),
       filters: {
-        stateCode: filters.stateCode || 'ALL',
+        stateKey: filters.stateKey || 'ALL',
         academicYear,
       },
       data: {
@@ -420,23 +452,26 @@ export class AccreditationService {
     filters: DashboardFiltersDto,
   ): Promise<KpiEnvelope<ProcessOperationsResponse>> {
     const academicYear = filters.academicYear || (await this.getCurrentYear());
-    const stateCode = filters.stateCode || 'ALL';
+    const stateKey = filters.stateKey || 'ALL';
 
     // KPI 7 & KPI 10: Query programme framework MV for frequency and VSK data.
     // MV_DASH_PROGRAMME_FRAMEWORK exposes state_code only, so the state name
-    // for the VSK list (KPI 10) is resolved via a join to STATE_MASTER.
+    // for the VSK list (KPI 10) is resolved via a join to the ADW master view
+    // VW_STATE_MASTER (STATE_ID = business state code), mirroring the attendance
+    // dashboard's filter-master source instead of an accreditation-local table.
     let freqQuery = `SELECT pf.state_code              AS "state_code",
-                            sm.state_name              AS "state_name",
+                            sm.STATE_NAME              AS "state_name",
                             pf.accreditation_frequency AS "accreditation_frequency",
                             pf.integration_of_vsk      AS "integration_of_vsk"
-                     FROM ${this.accrSchema}.mv_dash_programme_framework pf
-                     LEFT JOIN ${this.accrSchema}.state_master sm
-                            ON sm.state_code = pf.state_code
+                     FROM ${this.schema}.mv_dash_programme_framework pf
+                     LEFT JOIN ${this.schema}.VW_STATE_MASTER sm
+                            ON sm.STATE_ID = pf.state_code
                      WHERE pf.academic_year = :1`;
     const freqParams: (string | number)[] = [academicYear];
-    if (stateCode !== 'ALL') {
-      freqQuery += ` AND pf.state_code = :2`;
-      freqParams.push(stateCode);
+    {
+      const sf = this.buildStateFilter(stateKey, 'pf', 2);
+      freqQuery += sf.clause;
+      freqParams.push(...sf.bind);
     }
     const freqRows: MvProgrammeFrameworkFrequencyRow[] = await this.dataSource.query(
       freqQuery,
@@ -480,12 +515,13 @@ export class AccreditationService {
                            pct_cluster_official     AS "pct_cluster_official",
                            pct_community_members    AS "pct_community_members",
                            pct_third_party_auditors AS "pct_third_party_auditors"
-                    FROM ${this.accrSchema}.mv_dash_process_operations
+                    FROM ${this.schema}.mv_dash_process_operations
                     WHERE academic_year = :1`;
     const opsParams: (string | number)[] = [academicYear];
-    if (stateCode !== 'ALL') {
-      opsQuery += ` AND state_code = :2`;
-      opsParams.push(stateCode);
+    {
+      const sf = this.buildStateFilter(stateKey, '', 2);
+      opsQuery += sf.clause;
+      opsParams.push(...sf.bind);
     }
     const opsRows: MvProcessOperationsRow[] = await this.dataSource.query(
       opsQuery,
@@ -533,7 +569,7 @@ export class AccreditationService {
       kpi_no: [7, 8, 9, 10],
       title: 'Process Quality & Operations',
       as_of: new Date().toISOString(),
-      filters: { stateCode, academicYear },
+      filters: { stateKey, academicYear },
       data: {
         kpi_7: { frequency_distribution: frequencyDistribution },
         kpi_8: {
@@ -563,7 +599,7 @@ export class AccreditationService {
     filters: DashboardFiltersDto,
   ): Promise<KpiEnvelope<DataQualityResponse>> {
     const academicYear = filters.academicYear || (await this.getCurrentYear());
-    const stateCode = filters.stateCode || 'ALL';
+    const stateKey = filters.stateKey || 'ALL';
 
     let query = `SELECT state_code                AS "state_code",
                         schools_submitted         AS "schools_submitted",
@@ -573,12 +609,13 @@ export class AccreditationService {
                         delayed_pct               AS "delayed_pct",
                         significantly_delayed_pct AS "significantly_delayed_pct",
                         avg_delay_days            AS "avg_delay_days"
-                 FROM ${this.accrSchema}.mv_dash_data_quality
+                 FROM ${this.schema}.mv_dash_data_quality
                  WHERE academic_year = :1`;
     const params: (string | number)[] = [academicYear];
-    if (stateCode !== 'ALL') {
-      query += ` AND state_code = :2`;
-      params.push(stateCode);
+    {
+      const sf = this.buildStateFilter(stateKey, '', 2);
+      query += sf.clause;
+      params.push(...sf.bind);
     }
 
     const rows: MvDataQualityRow[] = await this.dataSource.query(query, params);
@@ -616,7 +653,7 @@ export class AccreditationService {
       kpi_no: [13, 14],
       title: 'Data Quality & Compliance',
       as_of: new Date().toISOString(),
-      filters: { stateCode, academicYear },
+      filters: { stateKey, academicYear },
       data: {
         kpi_13: {
           self_disclosure_pct: selfDisclosurePct,
@@ -647,7 +684,7 @@ export class AccreditationService {
     filters: DashboardFiltersDto,
   ): Promise<KpiEnvelope<ImpactOutcomesResponse>> {
     const academicYear = filters.academicYear || (await this.getCurrentYear());
-    const stateCode = filters.stateCode || 'ALL';
+    const stateKey = filters.stateKey || 'ALL';
 
     let query = `SELECT state_code                    AS "state_code",
                         sharing_of_result_label       AS "sharing_of_result_label",
@@ -656,12 +693,13 @@ export class AccreditationService {
                         schools_with_prior_assessment AS "schools_with_prior_assessment",
                         pct_schools_improved          AS "pct_schools_improved",
                         avg_score_change              AS "avg_score_change"
-                 FROM ${this.accrSchema}.mv_dash_impact_outcomes
+                 FROM ${this.schema}.mv_dash_impact_outcomes
                  WHERE academic_year = :1`;
     const params: (string | number)[] = [academicYear];
-    if (stateCode !== 'ALL') {
-      query += ` AND state_code = :2`;
-      params.push(stateCode);
+    {
+      const sf = this.buildStateFilter(stateKey, '', 2);
+      query += sf.clause;
+      params.push(...sf.bind);
     }
 
     const rows = await this.dataSource.query(query, params);
@@ -737,7 +775,7 @@ export class AccreditationService {
       kpi_no: [15, 16, 17],
       title: 'Impact/Outcomes & Decision-Making',
       as_of: new Date().toISOString(),
-      filters: { stateCode, academicYear },
+      filters: { stateKey, academicYear },
       data: {
         kpi_15: { decision_use_cases: decisionUseCases },
         kpi_16: {
@@ -767,7 +805,7 @@ export class AccreditationService {
     // years from the dashboard MVs; flag the most recent one as "current".
     const rows = await this.dataSource.query(
       `SELECT academic_year AS "academic_year"
-       FROM ${this.accrSchema}.mv_dash_coverage_reach
+       FROM ${this.schema}.mv_dash_coverage_reach
        WHERE academic_year IS NOT NULL
        GROUP BY academic_year
        ORDER BY academic_year DESC`,
@@ -786,9 +824,15 @@ export class AccreditationService {
    * Validates: Requirement 15.2
    */
   async getStates(): Promise<Array<{ state_code: string; state_name: string }>> {
+    // Source of truth: the ADW replica master view VW_STATE_MASTER (same view
+    // the attendance dashboard's FiltersService reads). The accreditation KPI
+    // MVs key on the business state code, which maps to VW_STATE_MASTER.STATE_ID
+    // (STATE_KEY is the numeric surrogate used by the geo cascade, not here).
     const rows = await this.dataSource.query(
-      `SELECT state_code AS "state_code", state_name AS "state_name"
-       FROM ${this.accrSchema}.state_master ORDER BY state_name`,
+      `SELECT STATE_ID AS "state_code", STATE_NAME AS "state_name"
+       FROM ${this.schema}.VW_STATE_MASTER
+       WHERE IS_ACTIVE = 1 AND STATE_NAME IS NOT NULL
+       ORDER BY STATE_NAME`,
     );
     return rows.map((row: { state_code: string; state_name: string }) => ({
       state_code: row.state_code,
@@ -812,7 +856,7 @@ export class AccreditationService {
     // Step 1: Get latest ETL load timestamp from the flat fact table.
     const loadResult = await this.dataSource.query(
       `SELECT MAX(dw_load_ts) AS "max_load_ts"
-       FROM ${this.accrSchema}.domain_assessment_flat`,
+       FROM ${this.schema}.domain_assessment_flat`,
     );
     const maxLoadTs = loadResult[0]?.max_load_ts;
 
@@ -821,7 +865,7 @@ export class AccreditationService {
       `SELECT last_refresh_date AS "last_refresh"
        FROM all_mviews
        WHERE owner = UPPER(:1) AND mview_name = UPPER('MV_DASH_PROGRAMME_FRAMEWORK')`,
-      [this.accrSchema],
+      [this.schema],
     );
     const lastRefresh = refreshResult[0]?.last_refresh;
 
@@ -829,7 +873,7 @@ export class AccreditationService {
     if (maxLoadTs && (!lastRefresh || new Date(maxLoadTs) > new Date(lastRefresh))) {
       // Invoke the Oracle refresh procedure that refreshes all 6 MVs.
       await this.dataSource.query(
-        `BEGIN ${this.accrSchema}.refresh_dashboard_views(); END;`,
+        `BEGIN ${this.schema}.refresh_dashboard_views(); END;`,
       );
       return { refreshed: true, timestamp: new Date().toISOString() };
     }

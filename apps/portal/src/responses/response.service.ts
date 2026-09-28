@@ -142,9 +142,10 @@ export class FormResponseService {
       }
     }
     const admins = await this.userRepository.find({
+      // role resolved via portal_role relation (role_code is the key).
       where: [
-        { role: 'RVSK_Admin', isActive: true },
-        { role: 'Super_Admin', isActive: true },
+        { rolePortal: { roleCode: 'RVSK_Admin' }, isActive: true },
+        { rolePortal: { roleCode: 'Super_Admin' }, isActive: true },
       ],
     });
     for (const a of admins) {

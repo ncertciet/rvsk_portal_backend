@@ -4,7 +4,10 @@ import {
   Column,
   BeforeInsert,
   BeforeUpdate,
+  ManyToOne,
+  JoinColumn,
 } from 'typeorm';
+import { PortalRole } from '../../roles/entities/portal-role.entity';
 
 @Entity({ name: 'portal_users', schema: 'rvsk_portal' })
 export class PortalUser {
@@ -20,8 +23,22 @@ export class PortalUser {
   @Column({ name: 'password_hash', nullable: true, length: 255 })
   passwordHash: string;
 
-  @Column({ name: 'role', nullable: false, length: 50 })
-  role: string;
+  // RVSK-RBAC-ROLE-002-A (Phase 4) — the legacy `role` VARCHAR column has been
+  // dropped. `role_id` (FK) is now the single source of truth; `role` is a
+  // read-only accessor that resolves `role_code` from the eagerly-loaded
+  // portal_role master, so all existing `user.role` reads keep working and the
+  // JWT claim still carries the role_code string. Authorization is unchanged.
+  @Column({ name: 'role_id', type: 'uuid', nullable: true })
+  roleId: string | null;
+
+  @ManyToOne(() => PortalRole, { eager: true })
+  @JoinColumn({ name: 'role_id' })
+  rolePortal?: PortalRole | null;
+
+  /** Backward-compatible accessor: the stable role_code authorization key. */
+  get role(): string {
+    return this.rolePortal?.roleCode ?? '';
+  }
 
   // ── Geographic scope (view-sourced keys + denormalized name snapshots) ──
   // *_key columns are bigint (PostgreSQL). The pg driver returns bigint as a

@@ -10,6 +10,7 @@ import { GrievanceController } from './grievance.controller';
 import { CategoriesModule } from '../categories/categories.module';
 import { GrievanceAttachmentsModule } from '../grievance-attachments/grievance-attachments.module';
 import { NotificationModule } from '../notification/notification.module';
+import { SpocMappingModule } from '../spoc-mapping/spoc-mapping.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { NotificationModule } from '../notification/notification.module';
     CategoriesModule,
     GrievanceAttachmentsModule,
     NotificationModule,
+    SpocMappingModule,
   ],
   controllers: [GrievanceController],
   providers: [GrievanceService],

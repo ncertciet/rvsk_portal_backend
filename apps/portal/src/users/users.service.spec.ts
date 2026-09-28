@@ -7,7 +7,43 @@ import { UsersService } from './users.service';
 import { PortalUser } from '../auth/entities/portal-user.entity';
 import { MasterDataService } from '../master-data/master-data.service';
 import { NotificationService } from '../notification/notification.service';
+import { AuditService } from '../audit/audit.service';
+import { RolesService } from '../roles/roles.service';
 import { CreateUserDto } from './dto/create-user.dto';
+
+/**
+ * Shared provider mocks for AuditService (non-blocking audit/feed writes) and
+ * RolesService (role_code -> portal_role resolution for the role_id dual-write).
+ * findActiveByRoleCode returns a synthetic active row so the dual-write path is
+ * exercised without a DB; role validity is still governed by resolveRoleForWrite
+ * (unknown codes fall through to the static list and reject as before).
+ */
+const auditMock = () => ({
+  record: jest.fn().mockResolvedValue(undefined),
+  log: jest.fn().mockResolvedValue(undefined),
+  recordAndLog: jest.fn().mockResolvedValue(undefined),
+});
+const KNOWN_ROLE_CODES = new Set([
+  'Super_Admin',
+  'RVSK_Admin',
+  'Ministry_Admin',
+  'RVSK_SPOC',
+  'Viewer',
+  'State_Admin',
+  'District_Admin',
+  'Block_Admin',
+]);
+const rolesMock = () => ({
+  findActiveByRoleCode: jest
+    .fn()
+    .mockImplementation((code: string) =>
+      Promise.resolve(
+        KNOWN_ROLE_CODES.has(code)
+          ? { id: `role-${code}`, roleCode: code, isActive: true }
+          : null,
+      ),
+    ),
+});
 
 /**
  * Unit tests for UsersService (RVSK-USR-MGMT-001.1/.2/.4/.7/.8).
@@ -67,6 +103,8 @@ describe('UsersService', () => {
           provide: NotificationService,
           useValue: { notify: jest.fn().mockResolvedValue(undefined) },
         },
+        { provide: AuditService, useValue: auditMock() },
+        { provide: RolesService, useValue: rolesMock() },
       ],
     }).compile();
 
@@ -265,6 +303,8 @@ describe('UsersService', () => {
             provide: NotificationService,
             useValue: { notify: jest.fn().mockResolvedValue(undefined) },
           },
+          { provide: AuditService, useValue: auditMock() },
+          { provide: RolesService, useValue: rolesMock() },
         ],
       }).compile();
       const svc = stringConfigModule.get(UsersService);

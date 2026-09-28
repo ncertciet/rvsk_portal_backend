@@ -218,12 +218,13 @@ INSERT INTO grievance_categories (code, label, parent_code, sort_order, is_activ
 -- 6. SAMPLE GRIEVANCES (for testing)
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-INSERT INTO grievances (id, grievance_id, created_by, state_code, district_code, assigned_to, category, sub_category, subject, description, status, created_at, updated_at)
+INSERT INTO grievances (id, grievance_id, created_by, state_key, district_key, assigned_to, category, sub_category, subject, description, status, created_at, updated_at)
 SELECT
   gen_random_uuid(),
   'GRV-07-20260810-0001',
   (SELECT id FROM portal_users WHERE username = 'stateadmin_dl'),
-  '07', '0701',
+  (SELECT state_key FROM rvsk_portal.vw_state_master WHERE state_id = '07'),
+  (SELECT district_key FROM portal_users WHERE username = 'distadmin_dl01'),
   (SELECT id FROM portal_users WHERE username = 'spoc_dl'),
   'INFRASTRUCTURE', 'INFRA_NETWORK',
   'Internet connectivity issue at VSK Delhi',
@@ -232,12 +233,13 @@ SELECT
   NOW() - interval '2 days',
   NOW() - interval '2 days';
 
-INSERT INTO grievances (id, grievance_id, created_by, state_code, district_code, category, sub_category, subject, description, status, created_at, updated_at)
+INSERT INTO grievances (id, grievance_id, created_by, state_key, district_key, category, sub_category, subject, description, status, created_at, updated_at)
 SELECT
   gen_random_uuid(),
   'GRV-27-20260810-0001',
   (SELECT id FROM portal_users WHERE username = 'stateadmin_mh'),
-  '27', NULL,
+  (SELECT state_key FROM rvsk_portal.vw_state_master WHERE state_id = '27'),
+  NULL,
   'SOFTWARE', 'SW_PORTAL',
   'Portal login issue for teachers',
   'Multiple teachers in Maharashtra are unable to log in to the portal. Getting timeout errors.',
@@ -245,12 +247,13 @@ SELECT
   NOW() - interval '1 day',
   NOW() - interval '1 day';
 
-INSERT INTO grievances (id, grievance_id, created_by, state_code, district_code, assigned_to, category, subject, description, status, created_at, updated_at, resolved_at)
+INSERT INTO grievances (id, grievance_id, created_by, state_key, district_key, assigned_to, category, subject, description, status, created_at, updated_at, resolved_at)
 SELECT
   gen_random_uuid(),
   'GRV-07-20260808-0001',
   (SELECT id FROM portal_users WHERE username = 'distadmin_dl01'),
-  '07', '0701',
+  (SELECT state_key FROM rvsk_portal.vw_state_master WHERE state_id = '07'),
+  (SELECT district_key FROM portal_users WHERE username = 'distadmin_dl01'),
   (SELECT id FROM portal_users WHERE username = 'spoc_dl'),
   'TRAINING', 'Need training on new assessment module',
   'Our district needs a training session on the new NAS assessment module.',

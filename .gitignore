@@ -49,4 +49,8 @@ lerna-debug.log*
 # Oracle Wallet (sensitive)
 /wallet
 
+# SQL Seed File
+sql
+*.sql
+
 

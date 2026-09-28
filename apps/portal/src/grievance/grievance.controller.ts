@@ -51,7 +51,7 @@ export class GrievanceController {
     return this.grievanceService.getDashboard(
       user.userId,
       user.role,
-      user.stateCode,
+      user.stateKey ?? null,
     );
   }
 
@@ -73,8 +73,8 @@ export class GrievanceController {
   ) {
     return this.grievanceService.createGrievance(
       user.userId,
-      user.stateCode,
-      null,
+      user.stateKey ?? null,
+      user.districtKey ?? null,
       dto.category,
       dto.subCategory,
       dto.subject,
@@ -97,7 +97,7 @@ export class GrievanceController {
     return this.grievanceService.listGrievances(
       user.userId,
       user.role,
-      user.stateCode,
+      user.stateKey ?? null,
       search,
       status,
       category,

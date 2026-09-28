@@ -1,112 +1,40 @@
 import { Controller, Get, Query } from '@nestjs/common';
-import { AttendanceService } from './attendance.service';
+import { CurrentUser, AuthenticatedUser } from '@rvsk/common';
 
+import { AttendancePageService } from './attendance-page.service';
+import { AttendanceTrendsService } from './attendance-trends.service';
+import { AttendanceFiltersDto } from './dto/attendance-filters.dto';
+import { AttendanceTrendDto } from './dto/attendance-trend.dto';
+
+/**
+ * Attendance Dashboard KPI endpoints (design.md §7 / §8 / §15).
+ *
+ * Auth: JwtAuthGuard is GLOBAL (CommonModule APP_GUARD) — a valid token is
+ * already required; no @UseGuards here. Scope is enforced service-side from the
+ * JWT (@CurrentUser), so a scoped user cannot read another jurisdiction.
+ *
+ * Data path: services read pre-computed per-node blobs from Redis (never Oracle
+ * at request time in production; REDIS_ONLY=false enables a dev MV fallback).
+ */
 @Controller('attendance')
 export class AttendanceController {
-  constructor(private readonly attendanceService: AttendanceService) {}
+  constructor(
+    private readonly page: AttendancePageService,
+    private readonly trends: AttendanceTrendsService,
+  ) {}
 
-  @Get('integration-coverage')
-  getIntegrationCoverage() {
-    return this.attendanceService.getIntegrationCoverage();
-  }
-
-  @Get('summary')
-  getSummary(
-    @Query('date') date: string,
-    @Query('stateId') stateId?: string,
+  /** Page 1 — combined Attendance summary (design.md §15.1). */
+  @Get('page/attendance')
+  getAttendancePage(
+    @Query() filters: AttendanceFiltersDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.attendanceService.getSummary(date, stateId);
+    return this.page.getAttendancePage(filters, user);
   }
 
-  @Get('state-table')
-  getStateTable(@Query('date') date: string) {
-    return this.attendanceService.getStateTable(date);
-  }
-
-  @Get('regional-leaders')
-  getRegionalLeaders(@Query('date') date: string) {
-    return this.attendanceService.getRegionalLeaders(date);
-  }
-
-  @Get('trends')
-  getTrends(
-    @Query('days') days?: string,
-    @Query('startDate') startDate?: string,
-    @Query('endDate') endDate?: string,
-    @Query('stateId') stateId?: string,
-  ) {
-    return this.attendanceService.getTrends(days, startDate, endDate, stateId);
-  }
-
-  @Get('detailed')
-  getDetailed(
-    @Query('date') date: string,
-    @Query('stateId') stateId?: string,
-    @Query('districtId') districtId?: string,
-    @Query('blockId') blockId?: string,
-    @Query('clusterId') clusterId?: string,
-    @Query('page') page?: string,
-    @Query('size') size?: string,
-  ) {
-    return this.attendanceService.getDetailed(
-      date, stateId, districtId, blockId, clusterId,
-      parseInt(page || '1', 10),
-      parseInt(size || '20', 10),
-    );
-  }
-
-  @Get('monthly')
-  getMonthly(
-    @Query('year') year: string,
-    @Query('stateId') stateId?: string,
-  ) {
-    return this.attendanceService.getMonthly(year, stateId);
-  }
-
-  @Get('schools')
-  getSchools(
-    @Query('stateId') stateId?: string,
-    @Query('districtId') districtId?: string,
-    @Query('blockId') blockId?: string,
-    @Query('search') search?: string,
-    @Query('page') page?: string,
-    @Query('size') size?: string,
-    @Query('date') date?: string,
-  ) {
-    return this.attendanceService.getSchools(
-      stateId, districtId, blockId, search,
-      parseInt(page || '1', 10),
-      parseInt(size || '20', 10),
-      date,
-    );
-  }
-
-  @Get('teachers/dashboard')
-  getTeachersDashboard(
-    @Query('date') date: string,
-    @Query('stateId') stateId?: string,
-  ) {
-    return this.attendanceService.getTeachersDashboard(date, stateId);
-  }
-
-  @Get('students/dashboard')
-  getStudentsDashboard(
-    @Query('date') date: string,
-    @Query('stateId') stateId?: string,
-  ) {
-    return this.attendanceService.getStudentsDashboard(date, stateId);
-  }
-
-  @Get('report/school-management')
-  getSchoolManagementReport(
-    @Query('date') date: string,
-    @Query('stateId') stateId?: string,
-    @Query('districtId') districtId?: string,
-    @Query('blockId') blockId?: string,
-    @Query('clusterId') clusterId?: string,
-  ) {
-    return this.attendanceService.getSchoolManagementReport(
-      date, stateId, districtId, blockId, clusterId,
-    );
+  /** Page 2 — Trends (design.md §15.2). Split/lazy: default returns overall+teacher. */
+  @Get('trend')
+  getTrend(@Query() dto: AttendanceTrendDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.trends.getTrend(dto, user);
   }
 }

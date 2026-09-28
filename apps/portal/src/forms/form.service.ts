@@ -48,9 +48,10 @@ export class FormService {
       : '';
     for (const stateKey of stateKeys) {
       const users = await this.userRepository.find({
+        // role resolved via portal_role relation (role_code is the key).
         where: [
-          { stateKey, role: 'State_Admin', isActive: true },
-          { stateKey, role: 'State_SPOC', isActive: true },
+          { stateKey, rolePortal: { roleCode: 'State_Admin' }, isActive: true },
+          { stateKey, rolePortal: { roleCode: 'State_SPOC' }, isActive: true },
         ],
       });
       const stateName = users[0]?.stateName || `State ${stateKey}`;

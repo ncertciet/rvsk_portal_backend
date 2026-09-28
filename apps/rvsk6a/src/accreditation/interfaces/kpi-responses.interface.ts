@@ -5,7 +5,7 @@
  */
 
 export interface DashboardFilters {
-  stateCode?: string; // default: 'ALL'
+  stateKey?: string; // numeric STATE_KEY as string, or 'ALL' (default). Echoed back.
   academicYear?: string; // default: current active year
 }
 
