@@ -14,7 +14,7 @@ interface Grievance {
   id: string;
   createdBy: string;
   assignedTo: string | null;
-  stateCode: string;
+  stateKey: string | null;
 }
 
 // Pure function that simulates the scope filtering logic
@@ -35,7 +35,7 @@ describe('Property: Data Scope Enforcement (Property 5)', () => {
     id: fc.uuid(),
     createdBy: fc.uuid(),
     assignedTo: fc.option(fc.uuid(), { nil: null }),
-    stateCode: fc.stringOf(fc.constantFrom('A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'), { minLength: 2, maxLength: 2 }),
+    stateKey: fc.option(fc.integer({ min: 1, max: 99999 }).map(String), { nil: null }),
   });
 
   it('Super_Admin sees ALL grievances without any filtering', () => {

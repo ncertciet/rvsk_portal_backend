@@ -17,11 +17,12 @@ import {
 import { MasterDataService } from '../master-data/master-data.service';
 import { NotificationService } from '../notification/notification.service';
 import { AuditService } from '../audit/audit.service';
+import { RolesService } from '../roles/roles.service';
+import { PortalRole } from '../roles/entities/portal-role.entity';
 import {
   canCreateRole,
   geoLevelForRole,
   isNonGeoRole,
-  isValidRole,
 } from './user-roles';
 
 /**
@@ -50,6 +51,7 @@ const EMPTY_SCOPE: ResolvedScope = {
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
   private readonly bcryptStrength: number;
+  private readonly tempPasswordPrefix: string;
 
   constructor(
     @InjectRepository(PortalUser)
@@ -58,12 +60,18 @@ export class UsersService {
     private readonly masterDataService: MasterDataService,
     private readonly notificationService: NotificationService,
     private readonly auditService: AuditService,
+    private readonly rolesService: RolesService,
   ) {
     // ConfigService returns env values as strings; bcrypt.hash needs a numeric
     // salt-rounds value, so coerce explicitly (a string like "10" is otherwise
     // treated as a salt and throws "Invalid salt").
     const rounds = parseInt(String(this.configService.get('BCRYPT_STRENGTH', 12)), 10);
     this.bcryptStrength = Number.isNaN(rounds) ? 12 : rounds;
+
+    // Configurable prefix for auto-generated temp passwords (user create + admin
+    // reset). Falls back to the historical default when the env var is unset.
+    const prefix = String(this.configService.get('TEMP_PASSWORD_PREFIX', 'Rvsk@')).trim();
+    this.tempPasswordPrefix = prefix.length > 0 ? prefix : 'Rvsk@';
   }
 
   // ==================== ROLE + GEO VALIDATION HELPERS ====================
@@ -231,9 +239,9 @@ export class UsersService {
       }
     }
 
-    // Apply role filter
+    // Apply role filter via the portal_role relation (role_code is the key).
     if (role) {
-      where.role = role;
+      where.rolePortal = { roleCode: role };
     }
 
     let users = await this.userRepo.find({ where });
@@ -270,6 +278,24 @@ export class UsersService {
     return this.toUserProfileDto(user);
   }
 
+  /**
+   * RVSK-RBAC-ROLE-002-A (Phase 4) — Validate a role_code and resolve its
+   * master row. `role_id` is now the single source of truth, so a valid,
+   * ACTIVE portal_role row is REQUIRED. Unknown/inactive role_codes are
+   * rejected with the unchanged INVALID_ROLE contract.
+   */
+  private async resolveRoleForWrite(role: string): Promise<PortalRole> {
+    const master = await this.rolesService.findActiveByRoleCode(role);
+    if (master) {
+      return master;
+    }
+    throw new AppException(
+      `Unknown role: ${role}`,
+      HttpStatus.BAD_REQUEST,
+      'INVALID_ROLE',
+    );
+  }
+
   // ==================== CREATE USER ====================
 
   /**
@@ -282,14 +308,11 @@ export class UsersService {
     createdBy: string,
     callerRole: string,
   ): Promise<CreateUserResponseDto> {
-    // Validate the target role is a known role.
-    if (!isValidRole(dto.role)) {
-      throw new AppException(
-        `Unknown role: ${dto.role}`,
-        HttpStatus.BAD_REQUEST,
-        'INVALID_ROLE',
-      );
-    }
+    // Validate the target role + resolve its master row for dual-write.
+    // Authoritative check is the portal_role master (active roles only); the
+    // static ALL_ROLES list is a transitional fallback so behaviour is never
+    // stricter than before while the master is being adopted.
+    const roleRow = await this.resolveRoleForWrite(dto.role);
 
     // Role-based creation authority (spec .1): RVSK_Admin cannot create Super_Admin.
     if (!canCreateRole(callerRole, dto.role)) {
@@ -338,7 +361,8 @@ export class UsersService {
       username: dto.username,
       displayName: dto.displayName,
       passwordHash,
-      role: dto.role,
+      roleId: roleRow.id,
+      rolePortal: roleRow,
       stateKey: scope.stateKey,
       stateName: scope.stateName,
       districtKey: scope.districtKey,
@@ -387,7 +411,8 @@ export class UsersService {
     );
 
     // RVSK-NOTIFY-EMAIL-003: USER_CREATED (non-blocking; response unchanged).
-    await this.notifyUser('USER_CREATED', savedUser);
+    // Pass the temp password so the welcome email can include it ({{temp_password}}).
+    await this.notifyUser('USER_CREATED', savedUser, { temp_password: tempPassword });
 
     return {
       success: true,
@@ -435,14 +460,12 @@ export class UsersService {
     // The effective role after this edit determines geo requirements.
     const effectiveRole = dto.role !== undefined ? dto.role : user.role;
     if (dto.role !== undefined) {
-      if (!isValidRole(dto.role)) {
-        throw new AppException(
-          `Unknown role: ${dto.role}`,
-          HttpStatus.BAD_REQUEST,
-          'INVALID_ROLE',
-        );
-      }
-      user.role = dto.role;
+      // Validate + resolve the master row, then set role_id (the source of
+      // truth). rolePortal is refreshed so the `role` getter reflects the new
+      // role_code immediately for logging/audit/DTO below.
+      const roleRow = await this.resolveRoleForWrite(dto.role);
+      user.roleId = roleRow.id;
+      user.rolePortal = roleRow;
     }
 
     // Re-resolve geo scope whenever role or any geo key is part of the edit.
@@ -794,11 +817,13 @@ export class UsersService {
   // ==================== PRIVATE HELPERS ====================
 
   /**
-   * Generate temp password: Rvsk@ + 4 random digits (1000-9999).
+   * Generate temp password: configurable prefix (TEMP_PASSWORD_PREFIX, default
+   * "Rvsk@") + 4 random digits (1000-9999). Shared by user creation and admin
+   * password reset so both stay in sync.
    */
   private generateTempPassword(): string {
     const digits = 1000 + Math.floor(Math.random() * 9000);
-    return `Rvsk@${digits}`;
+    return `${this.tempPasswordPrefix}${digits}`;
   }
 
   /**

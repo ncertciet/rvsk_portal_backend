@@ -204,8 +204,8 @@ CREATE TABLE grievances (
     id              UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     grievance_id    VARCHAR(50) NOT NULL UNIQUE,
     created_by      UUID NOT NULL REFERENCES portal_users(id),
-    state_code      VARCHAR(2),
-    district_code   VARCHAR(10),
+    state_key       BIGINT,
+    district_key    BIGINT,
     assigned_to     UUID REFERENCES portal_users(id),
     category        VARCHAR(50) NOT NULL,
     sub_category    VARCHAR(50),
@@ -220,7 +220,8 @@ CREATE TABLE grievances (
 CREATE INDEX idx_grv_status ON grievances(status);
 CREATE INDEX idx_grv_created_by ON grievances(created_by);
 CREATE INDEX idx_grv_assigned_to ON grievances(assigned_to);
-CREATE INDEX idx_grv_state_code ON grievances(state_code);
+CREATE INDEX idx_grv_state_key ON grievances(state_key);
+CREATE INDEX idx_grv_district_key ON grievances(district_key);
 
 CREATE TABLE grievance_attachments (
     id              UUID DEFAULT gen_random_uuid() PRIMARY KEY,

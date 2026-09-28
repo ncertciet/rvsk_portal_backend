@@ -24,11 +24,12 @@ export class Grievance {
   })
   createdBy: string;
 
-  @Column({ name: 'state_code', nullable: true, length: 2 })
-  stateCode: string | null = null;
+  // Geographic scope keys (authoritative). bigint → JS string via pg driver.
+  @Column({ name: 'state_key', type: 'bigint', nullable: true })
+  stateKey: string | null = null;
 
-  @Column({ name: 'district_code', nullable: true, length: 10 })
-  districtCode: string | null = null;
+  @Column({ name: 'district_key', type: 'bigint', nullable: true })
+  districtKey: string | null = null;
 
   @Column({
     name: 'assigned_to',

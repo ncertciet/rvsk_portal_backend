@@ -61,8 +61,8 @@ export class CreateNotificationConfig1758700000000 implements MigrationInterface
         desc: 'Sent to a newly created portal user.',
         recipient: 'USER',
         subject: 'Welcome to {{brand_name}} — Your account is ready',
-        body: '<p>Dear {{user_name}},</p><p>Your {{brand_name}} account has been created.</p><p><strong>User ID:</strong> {{user_id}}</p><p>Please sign in at <a href="{{portal_url}}">{{portal_url}}</a> and change your password on first login.</p>',
-        tokens: 'user_name,user_id,portal_url,brand_name',
+        body: '<p>Dear {{user_name}},</p><p>Your {{brand_name}} account has been created.</p><p><strong>User ID:</strong> {{user_id}}<br/><strong>Temporary Password:</strong> {{temp_password}}</p><p>Please sign in at <a href="{{portal_url}}">{{portal_url}}</a> and change your password on first login.</p>',
+        tokens: 'user_name,user_id,temp_password,portal_url,brand_name',
       },
       {
         code: 'PASSWORD_RESET',

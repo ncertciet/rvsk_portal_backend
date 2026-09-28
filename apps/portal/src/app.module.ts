@@ -7,6 +7,7 @@ import { CommonModule, createPostgresDataSource } from '@rvsk/common';
 // Auth modules
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
+import { RolesModule } from './roles/roles.module';
 import { RbacModule } from './rbac/rbac.module';
 import { MasterDataModule } from './master-data/master-data.module';
 import { VskModule } from './vsk/vsk.module';
@@ -17,6 +18,7 @@ import { AuditModule } from './audit/audit.module';
 
 // Grievance modules
 import { GrievanceModule } from './grievance/grievance.module';
+import { SpocMappingModule } from './spoc-mapping/spoc-mapping.module';
 import { CategoriesModule } from './categories/categories.module';
 import { GrievanceAttachmentsModule } from './grievance-attachments/grievance-attachments.module';
 
@@ -49,6 +51,7 @@ import { HealthController } from './health.controller';
     // Auth domain
     AuthModule,
     UsersModule,
+    RolesModule,
     RbacModule,
     MasterDataModule,
     VskModule,
@@ -57,6 +60,7 @@ import { HealthController } from './health.controller';
     NotificationModule,
     // Grievance domain
     GrievanceModule,
+    SpocMappingModule,
     CategoriesModule,
     GrievanceAttachmentsModule,
     // Forms domain
