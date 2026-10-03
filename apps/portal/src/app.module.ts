@@ -13,6 +13,7 @@ import { MasterDataModule } from './master-data/master-data.module';
 import { VskModule } from './vsk/vsk.module';
 import { HomeModule } from './home/home.module';
 import { GalleryModule } from './gallery/gallery.module';
+import { EventsModule } from './events/events.module';
 import { NotificationModule } from './notification/notification.module';
 import { AuditModule } from './audit/audit.module';
 
@@ -57,6 +58,7 @@ import { HealthController } from './health.controller';
     VskModule,
     HomeModule,
     GalleryModule,
+    EventsModule,
     NotificationModule,
     // Grievance domain
     GrievanceModule,

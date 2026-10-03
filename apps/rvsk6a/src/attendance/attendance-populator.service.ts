@@ -9,10 +9,13 @@ import {
   StudentOverallSeriesBlob,
   TeacherSeriesBlob,
   DimensionSeriesBlob,
+  GeoData,
+  GeoRegion,
+  StudentBreakdownData,
+  StudentBreakdownBar,
 } from './interfaces/dashboard';
 import {
   page1Key,
-  page1SchoolHashKey,
   seriesKey,
   GeoNode,
   GeoLevel,
@@ -47,13 +50,24 @@ export class AttendancePopulatorService {
   }
 
   /** Run the full nightly population (Page 1 for `date` + all trend series). */
-  async runNightly(date?: string): Promise<{ date: string; page1Nodes: number; seriesNodes: number }> {
+  async runNightly(date?: string): Promise<{
+    date: string; page1Nodes: number; seriesNodes: number; geoNodes: number; breakdownNodes: number;
+  }> {
     const d = date ?? (await this.latestDataDate()) ?? this.q.todayISO();
     this.logger.log(`Populator starting for date=${d} (schema=${this.schema}, ttl=${this.q.ttlSeconds}s)`);
+    // Publish the default snapshot date so the API resolves it from Redis
+    // (requirement B2) under the full TTL instead of a per-request MAX() lookup.
+    await this.q.set('att:v1:meta:latestDate', d);
     const page1Nodes = await this.populatePage1(d);
     const seriesNodes = await this.populateSeries(d);
-    this.logger.log(`Populator done: page1Nodes=${page1Nodes}, seriesNodes=${seriesNodes}`);
-    return { date: d, page1Nodes, seriesNodes };
+    // Option A: pre-populate geo (map+bar children) + student-breakdown so prod
+    // (REDIS_ONLY=true) serves them from Redis without any request-time ADW hit.
+    const geoNodes = await this.populateGeo(d);
+    const breakdownNodes = await this.populateStudentBreakdown(d);
+    this.logger.log(
+      `Populator done: page1Nodes=${page1Nodes}, seriesNodes=${seriesNodes}, geoNodes=${geoNodes}, breakdownNodes=${breakdownNodes}`,
+    );
+    return { date: d, page1Nodes, seriesNodes, geoNodes, breakdownNodes };
   }
 
   /** The most recent ATTENDANCE_DATE present in the geo×day MV. */
@@ -118,6 +132,9 @@ export class AttendancePopulatorService {
     const levels: Record<GeoLevel, Map<string, Agg>> = {
       national: new Map(), state: new Map(), district: new Map(), block: new Map(), cluster: new Map(),
     };
+    // Map each sub-state node (level:key) → its containing STATE_KEY, so UDISE
+    // 25-26 can stick to the parent state below State level (requirement C3).
+    const nodeState = new Map<string, string>();
     const NAT = '_';
     const ensure = (m: Map<string, Agg>, k: string): Agg => {
       let e = m.get(k);
@@ -142,12 +159,19 @@ export class AttendancePopulatorService {
       if (r.bk != null) e.cov.repBlocks.add(String(r.bk));
     };
 
+    const recordState = (lvl: GeoLevel, key: string, r: any) => {
+      if (lvl !== 'national' && lvl !== 'state' && r.sk != null) {
+        nodeState.set(`${lvl}:${key}`, String(r.sk));
+      }
+    };
+
     for (const r of census) {
       const patch = { act: +r.act, rvskStu: +r.stu, rvskTch: +r.tch };
       for (const [lvl, key] of this.nodeKeysFor(r, NAT)) {
         const e = ensure(levels[lvl], key);
         addCounts(e, patch);
         covExpected(e, r);
+        recordState(lvl, key, r);
       }
     }
     for (const r of att) {
@@ -158,46 +182,33 @@ export class AttendancePopulatorService {
         const e = ensure(levels[lvl], key);
         addCounts(e, patch);
         covReported(e, r);
+        recordState(lvl, key, r);
       }
     }
 
-    let count = 0;
+    const writes: { key: string; value: any }[] = [];
     for (const level of Object.keys(levels) as GeoLevel[]) {
       for (const [k, a] of levels[level]) {
         const node: GeoNode = level === 'national' ? { level } : { level, key: k };
-        const udiseRef =
-          level === 'national' ? udiseNational : level === 'state' ? udiseByState.get(k) ?? null : null;
+        // UDISE 25-26 (requirement C3): national → All-India row; state → own
+        // row; district/block/cluster → the CONTAINING STATE's row (sticks).
+        let udiseRef: any = null;
+        if (level === 'national') udiseRef = udiseNational;
+        else if (level === 'state') udiseRef = udiseByState.get(k) ?? null;
+        else {
+          const parentState = nodeState.get(`${level}:${k}`);
+          udiseRef = parentState ? udiseByState.get(parentState) ?? null : null;
+        }
         const blob = this.buildPage1Blob(date, level, a, udiseRef);
-        await this.q.set(page1Key(date, node), blob);
-        count++;
+        writes.push({ key: page1Key(date, node), value: blob });
       }
     }
+    await this.q.setMany(writes); // one pipeline instead of N awaited SETs
+    const count = writes.length;
 
-    // School-level: discrete keys att:v1:page1school:{date}:{udise} (API reads
-    // these individually; CacheService has no HGET).
-    const schoolRows = await this.q.query<any>(
-      `SELECT sd.UDISE_CODE "udise",
-              f.STU_PRESENT "sp", f.STU_ABSENT "saB",
-              f.TCH_MARKED "tm", f.TCH_PRESENT "tp", f.TCH_ABSENT "ta", f.TCH_ON_DUTY "tod",
-              f.STU_REPORTED "sr", f.TCH_REPORTED "tr",
-              sd.TOTAL_STUDENTS "rstu", sd.TOTAL_TEACHERS "rtch"
-       FROM ${this.schema}.MV_ATT_SCHOOL_DAY f
-       JOIN ${this.schema}.MV_GEO_SCHOOL_DIM sd ON sd.UDISE_CODE = f.UDISE_CODE
-       WHERE f.ATTENDANCE_DATE = TO_DATE(:1,'YYYY-MM-DD')`,
-      [date],
-    );
-    const hashPrefix = page1SchoolHashKey(date);
-    for (const r of schoolRows) {
-      const a: Agg = {
-        act: 1, rvskStu: +r.rstu, rvskTch: +r.rtch,
-        sp: +r.sp, sa: +r.saB, tm: +r.tm, tp: +r.tp, ta: +r.ta, tod: +r.tod,
-        srs: +r.sr, srt: +r.tr,
-        cov: zeroCov(),
-      };
-      // School node: coverage is not applicable (a single school), udiseRef null.
-      await this.q.set(`${hashPrefix}:${r.udise}`, this.buildPage1Blob(date, 'district', a, null));
-      count++;
-    }
+    // NOTE: school-level Page-1 is NOT pre-populated. Schools are served
+    // on-demand from MV_ATT_SCHOOL_DAY with cache-through (requirement C7,
+    // option b) — avoids ~1.15M nightly keys; only viewed schools get cached.
 
     return count;
   }
@@ -324,7 +335,7 @@ export class AttendancePopulatorService {
       if (r.ck != null) addOverall(this.nodeId('cluster', r.ck), r.d, r);
     }
 
-    let count = 0;
+    const seriesWrites: { key: string; value: any }[] = [];
     for (const [nodeId, byDate] of overall) {
       const node = this.parseNodeId(nodeId);
       const active = this.activeFor(activeByLevel, node);
@@ -345,10 +356,11 @@ export class AttendancePopulatorService {
 
       const overallBlob: StudentOverallSeriesBlob = { present, reported };
       const teacherBlob: TeacherSeriesBlob = { daily: teacherDaily };
-      await this.q.set(seriesKey(node, 'student:overall'), overallBlob);
-      await this.q.set(seriesKey(node, 'teacher'), teacherBlob);
-      count += 2;
+      seriesWrites.push({ key: seriesKey(node, 'student:overall'), value: overallBlob });
+      seriesWrites.push({ key: seriesKey(node, 'teacher'), value: teacherBlob });
     }
+    await this.q.setMany(seriesWrites);
+    let count = seriesWrites.length;
 
     // Dimensioned series: gender + category (from MV_ATT_GEO_DAY columns),
     // class (from MV_ATT_GEO_DAY_GRADE). Written per node.
@@ -431,7 +443,7 @@ export class AttendancePopulatorService {
     acc: Map<string, Map<string, Map<string, { p: number; a: number }>>>,
     stream: string,
   ): Promise<number> {
-    let count = 0;
+    const writes: { key: string; value: any }[] = [];
     for (const [nodeId, byS] of acc) {
       const node = this.parseNodeId(nodeId);
       const series: Record<string, DailyCountPoint[]> = {};
@@ -442,10 +454,178 @@ export class AttendancePopulatorService {
         });
       }
       const blob: DimensionSeriesBlob = { series };
-      await this.q.set(seriesKey(node, stream), blob);
-      count++;
+      writes.push({ key: seriesKey(node, stream), value: blob });
     }
-    return count;
+    await this.q.setMany(writes);
+    return writes.length;
+  }
+
+  // ── Concern 3: Geo children per node (map + State/UT bar) — Option A ─────────
+  // Writes att:v1:geo:{nodeSeg}:{date} for every parent node (national→cluster),
+  // each holding its CHILD regions {studentAttendancePct, teacherReportedPct,
+  // lat, lng}. Mirrors AttendanceGeoService.computeChildren, computed for ALL
+  // parents in one pass instead of per request.
+  async populateGeo(date: string): Promise<number> {
+    // One grouped query per parent→child relationship. The heavy work (census
+    // teacher-denominator + centroid over ~1.15M schools) is done in Oracle via
+    // GROUP BY, returning only ~child-count rows — NOT 1.15M rows into Node.
+    const pct = (n: number, d: number) => (d > 0 ? Math.round((n * 10000) / d) / 100 : 0);
+    const writes: { key: string; value: any }[] = [];
+
+    // levels: [parentCol | null, childKeyCol, childNameCol, childLevel, parentIdFn]
+    const rels: Array<{
+      parentCol: string | null;
+      childKey: string;
+      childName: string;
+      level: GeoRegion['level'];
+    }> = [
+      { parentCol: null, childKey: 'STATE_KEY', childName: 'STATE_NAME', level: 'state' },
+      { parentCol: 'STATE_KEY', childKey: 'DISTRICT_KEY', childName: 'DISTRICT_NAME', level: 'district' },
+      { parentCol: 'DISTRICT_KEY', childKey: 'BLOCK_KEY', childName: 'BLOCK_NAME', level: 'block' },
+      { parentCol: 'BLOCK_KEY', childKey: 'CLUSTER_KEY', childName: 'CLUSTER_NAME', level: 'cluster' },
+    ];
+
+    for (const rel of rels) {
+      // Census (per parent,child): name, teacher denom, centroid.
+      const parentSel = rel.parentCol ? `TO_CHAR(${rel.parentCol}) "pk",` : '';
+      const parentGrp = rel.parentCol ? `${rel.parentCol},` : '';
+      const censusSql = `
+        SELECT ${parentSel} TO_CHAR(${rel.childKey}) "ck", MAX(${rel.childName}) "cn",
+               NVL(SUM(TOTAL_TEACHERS),0) "tt", AVG(LATITUDE) "lat", AVG(LONGITUDE) "lng"
+        FROM ${this.schema}.MV_GEO_SCHOOL_DIM
+        WHERE ${rel.childKey} IS NOT NULL
+        GROUP BY ${parentGrp} ${rel.childKey}`;
+      // Attendance (per parent,child) for the date.
+      const attSql = `
+        SELECT ${parentSel} TO_CHAR(${rel.childKey}) "ck",
+               NVL(SUM(STU_PRESENT),0) "sp", NVL(SUM(STU_ABSENT),0) "sa", NVL(SUM(TCH_MARKED),0) "tm"
+        FROM ${this.schema}.MV_ATT_GEO_DAY
+        WHERE ATTENDANCE_DATE = TO_DATE(:1,'YYYY-MM-DD') AND ${rel.childKey} IS NOT NULL
+        GROUP BY ${parentGrp} ${rel.childKey}`;
+
+      const [census, att] = await Promise.all([
+        this.q.query<any>(censusSql),
+        this.q.query<any>(attSql, [date]),
+      ]);
+
+      // Index attendance by parent|child.
+      const attMap = new Map<string, any>();
+      for (const r of att) attMap.set(`${r.pk ?? '_'}|${r.ck}`, r);
+
+      // Group children under each parent node id.
+      const byParent = new Map<string, GeoRegion[]>();
+      for (const c of census) {
+        const parentId = rel.parentCol ? `${rel.level === 'district' ? 'state' : rel.level === 'block' ? 'district' : 'block'}:${c.pk}` : 'national';
+        const a = attMap.get(`${c.pk ?? '_'}|${c.ck}`);
+        const sp = Number(a?.sp ?? 0), sa = Number(a?.sa ?? 0), tm = Number(a?.tm ?? 0);
+        const region: GeoRegion = {
+          level: rel.level,
+          key: String(c.ck),
+          name: c.cn ?? '',
+          studentAttendancePct: pct(sp, sp + sa),
+          teacherReportedPct: pct(tm, Number(c.tt ?? 0)),
+          lat: c.lat != null ? Number(c.lat) : null,
+          lng: c.lng != null ? Number(c.lng) : null,
+        };
+        const arr = byParent.get(parentId) ?? [];
+        arr.push(region);
+        byParent.set(parentId, arr);
+      }
+
+      for (const [parentId, regions] of byParent) {
+        regions.sort((a, b) => b.teacherReportedPct - a.teacherReportedPct);
+        const data: GeoData = { childLevel: rel.level, regions };
+        writes.push({ key: `att:v1:geo:${parentId}:${date}`, value: data });
+      }
+    }
+
+    await this.q.setMany(writes);
+    return writes.length;
+  }
+
+  // ── Concern 4: Student breakdown per node (class/gender/category) — Option A ──
+  // Writes att:v1:studentbreak:{nodeSeg}:{date} for every node. Mirrors
+  // AttendanceStudentService.computeGeo for all nodes in one pass.
+  async populateStudentBreakdown(date: string): Promise<number> {
+    const GENDER: [string, string, string][] = [
+      ['Male', 'mp', 'ma'], ['Female', 'fp', 'fa'], ['Others', 'op', 'oa'],
+    ];
+    const CATEGORY: [string, string, string][] = [
+      ['General', 'gp', 'ga'], ['SC', 'scp', 'sca'], ['ST', 'stp', 'sta'], ['OBC', 'obp', 'oba'],
+    ];
+
+    // Gender/category per geo-path (one date).
+    const gc = await this.q.query<any>(
+      `SELECT STATE_KEY "sk", DISTRICT_KEY "dk", BLOCK_KEY "bk", CLUSTER_KEY "ck",
+              MALE_PRESENT "mp", MALE_ABSENT "ma", FEMALE_PRESENT "fp", FEMALE_ABSENT "fa",
+              OTHERS_PRESENT "op", OTHERS_ABSENT "oa",
+              GENERAL_PRESENT "gp", GENERAL_ABSENT "ga", SC_PRESENT "scp", SC_ABSENT "sca",
+              ST_PRESENT "stp", ST_ABSENT "sta", OBC_PRESENT "obp", OBC_ABSENT "oba"
+       FROM ${this.schema}.MV_ATT_GEO_DAY
+       WHERE ATTENDANCE_DATE = TO_DATE(:1,'YYYY-MM-DD')`,
+      [date],
+    );
+    // Class per geo-path×grade (one date).
+    const cls = await this.q.query<any>(
+      `SELECT STATE_KEY "sk", DISTRICT_KEY "dk", BLOCK_KEY "bk", CLUSTER_KEY "ck",
+              GRADE "g", STU_PRESENT "sp", STU_ABSENT "saB"
+       FROM ${this.schema}.MV_ATT_GEO_DAY_GRADE
+       WHERE ATTENDANCE_DATE = TO_DATE(:1,'YYYY-MM-DD')`,
+      [date],
+    );
+
+    // nodeId -> { gc: {col->{p,a}}, cls: {grade->{p,a}} }
+    const acc = new Map<string, { gc: Record<string, { p: number; a: number }>; cls: Map<number, { p: number; a: number }> }>();
+    const ensure = (id: string) => {
+      let e = acc.get(id);
+      if (!e) { e = { gc: {}, cls: new Map() }; acc.set(id, e); }
+      return e;
+    };
+    const bump = (id: string, col: string, p: number, a: number) => {
+      const e = ensure(id); const x = e.gc[col] ?? { p: 0, a: 0 }; x.p += p; x.a += a; e.gc[col] = x;
+    };
+    const gcNodes = (r: any): string[] => {
+      const out = ['national'];
+      if (r.sk != null) out.push(`state:${r.sk}`);
+      if (r.dk != null) out.push(`district:${r.dk}`);
+      if (r.bk != null) out.push(`block:${r.bk}`);
+      if (r.ck != null) out.push(`cluster:${r.ck}`);
+      return out;
+    };
+    for (const r of gc) {
+      for (const id of gcNodes(r)) {
+        for (const [, p, a] of [...GENDER, ...CATEGORY]) bump(id, p, +r[p] || 0, +r[a] || 0);
+      }
+    }
+    for (const r of cls) {
+      const g = Number(r.g);
+      if (!Number.isFinite(g)) continue;
+      for (const id of gcNodes(r)) {
+        const e = ensure(id); const x = e.cls.get(g) ?? { p: 0, a: 0 }; x.p += +r.sp || 0; x.a += +r.saB || 0; e.cls.set(g, x);
+      }
+    }
+
+    const pct = (n: number, d: number) => (d > 0 ? Math.round((n * 10000) / d) / 100 : 0);
+    const bars = (e: { gc: Record<string, { p: number; a: number }> }, defs: [string, string, string][]): StudentBreakdownBar[] =>
+      defs.map(([label, p]) => {
+        const v = e.gc[p] ?? { p: 0, a: 0 };
+        return { label, present: v.p, absent: v.a, pct: pct(v.p, v.p + v.a) };
+      });
+
+    const writes: { key: string; value: any }[] = [];
+    for (const [id, e] of acc) {
+      const byClass: StudentBreakdownBar[] = [...e.cls.entries()]
+        .sort(([x], [y]) => x - y)
+        .map(([g, v]) => ({ label: `Class ${g}`, present: v.p, absent: v.a, pct: pct(v.p, v.p + v.a) }));
+      const data: StudentBreakdownData = {
+        byClass,
+        byGender: bars(e, GENDER),
+        byCategory: bars(e, CATEGORY),
+      };
+      writes.push({ key: `att:v1:studentbreak:${id}:${date}`, value: data });
+    }
+    await this.q.setMany(writes);
+    return writes.length;
   }
 
   // ── node id helpers (compact string ↔ GeoNode) ───────────────────────────────

@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Delete,
   Param,
   Body,
@@ -124,5 +125,47 @@ export class GalleryController {
   async deleteImageAlias(@Param('id') id: string): Promise<{ success: boolean; message: string }> {
     await this.galleryService.deleteImage(id);
     return { success: true, message: 'Image deleted successfully' };
+  }
+
+  /**
+   * PUT /api/v1/gallery/:id/profile-image
+   * Mark one of the State's gallery images as its VSK Profile Image. State_Admin
+   * is scoped to their own state; RVSK/Super admins may set any.
+   */
+  @Roles('Super_Admin', 'RVSK_Admin', 'State_Admin')
+  @Put(':id/profile-image')
+  async setProfileImage(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<GalleryImage> {
+    // State admins are restricted to their own state; higher roles are not.
+    const scopeState =
+      user.role === 'State_Admin' ? user.stateCode || '' : '';
+    return this.galleryService.setProfileImage(id, scopeState);
+  }
+
+  /**
+   * GET /api/v1/gallery/profile-images
+   * Every state's selected VSK Profile Image (one per state) for the
+   * RVSK/Super Admin home "VSK Gallery" slider. Declared before the
+   * ':stateCode' route so it is not shadowed by it.
+   */
+  @Roles('Super_Admin', 'RVSK_Admin', 'State_Admin')
+  @Get('profile-images')
+  async listProfileImages(): Promise<GalleryImage[]> {
+    return this.galleryService.listProfileImages();
+  }
+
+  /**
+   * GET /api/v1/gallery/profile-image/:stateCode
+   * Public — the State's selected VSK Profile Image (for the portal slider).
+   */
+  @Public()
+  @Get('profile-image/:stateCode')
+  async getProfileImage(
+    @Param('stateCode') stateCode: string,
+  ): Promise<GalleryImage | { profileImage: null }> {
+    const image = await this.galleryService.getProfileImage(stateCode);
+    return image ?? { profileImage: null };
   }
 }

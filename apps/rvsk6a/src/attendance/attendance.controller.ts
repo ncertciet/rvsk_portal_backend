@@ -3,6 +3,8 @@ import { CurrentUser, AuthenticatedUser } from '@rvsk/common';
 
 import { AttendancePageService } from './attendance-page.service';
 import { AttendanceTrendsService } from './attendance-trends.service';
+import { AttendanceGeoService } from './attendance-geo.service';
+import { AttendanceStudentService } from './attendance-student.service';
 import { AttendanceFiltersDto } from './dto/attendance-filters.dto';
 import { AttendanceTrendDto } from './dto/attendance-trend.dto';
 
@@ -21,6 +23,8 @@ export class AttendanceController {
   constructor(
     private readonly page: AttendancePageService,
     private readonly trends: AttendanceTrendsService,
+    private readonly geo: AttendanceGeoService,
+    private readonly student: AttendanceStudentService,
   ) {}
 
   /** Page 1 — combined Attendance summary (design.md §15.1). */
@@ -36,5 +40,20 @@ export class AttendanceController {
   @Get('trend')
   getTrend(@Query() dto: AttendanceTrendDto, @CurrentUser() user: AuthenticatedUser) {
     return this.trends.getTrend(dto, user);
+  }
+
+  /**
+   * Page-1 Geography — children of the selected node for the map (student
+   * attendance %) + State/UT teacher bar (teacher reported %). Drill-aware.
+   */
+  @Get('geo')
+  getGeo(@Query() filters: AttendanceFiltersDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.geo.getGeo(filters, user);
+  }
+
+  /** Page-1 student breakdown bars — class / gender / category (independent). */
+  @Get('student-breakdown')
+  getStudentBreakdown(@Query() filters: AttendanceFiltersDto, @CurrentUser() user: AuthenticatedUser) {
+    return this.student.getStudentBreakdown(filters, user);
   }
 }

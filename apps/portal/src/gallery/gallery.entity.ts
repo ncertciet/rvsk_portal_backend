@@ -40,6 +40,9 @@ export class GalleryImage {
   @Column({ name: 'is_active', type: 'boolean', nullable: false, default: true })
   isActive: boolean;
 
+  @Column({ name: 'is_profile_image', type: 'boolean', nullable: false, default: false })
+  isProfileImage: boolean;
+
   // Virtual properties for backward compatibility with service code
   get title(): string {
     return this.caption || this.fileName;

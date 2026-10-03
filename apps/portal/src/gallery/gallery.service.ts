@@ -127,4 +127,64 @@ export class GalleryService {
     }
     return image;
   }
+
+  /**
+   * Mark one image as the State's VSK Profile Image. Clears the flag from any
+   * other image of the same state first, so exactly one profile image exists
+   * per state. The image must belong to the given state.
+   */
+  async setProfileImage(id: string, stateCode: string): Promise<GalleryImage> {
+    const image = await this.galleryRepo.findOne({ where: { id } });
+    if (!image || !image.isActive) {
+      throw new AppException(
+        'Gallery image not found',
+        HttpStatus.NOT_FOUND,
+        'IMAGE_NOT_FOUND',
+      );
+    }
+    if (stateCode && image.stateCode !== stateCode) {
+      throw new AppException(
+        'You can only set a profile image for your own state.',
+        HttpStatus.FORBIDDEN,
+        'STATE_MISMATCH',
+      );
+    }
+
+    // Clear existing profile flag for this state, then set the new one.
+    await this.galleryRepo
+      .createQueryBuilder()
+      .update(GalleryImage)
+      .set({ isProfileImage: false })
+      .where('state_code = :stateCode AND is_profile_image = true', {
+        stateCode: image.stateCode,
+      })
+      .execute();
+
+    image.isProfileImage = true;
+    const saved = await this.galleryRepo.save(image);
+    this.logger.log(`Profile image set for state ${image.stateCode}: ${saved.id}`);
+    return saved;
+  }
+
+  /**
+   * Return the current profile image for a state, or null if none selected.
+   */
+  async getProfileImage(stateCode: string): Promise<GalleryImage | null> {
+    if (!stateCode) return null;
+    return this.galleryRepo.findOne({
+      where: { stateCode, isProfileImage: true, isActive: true },
+    });
+  }
+
+  /**
+   * Return every state's selected profile image (one per state). Powers the
+   * RVSK/Super Admin home "VSK Gallery" slider, which shows one representative
+   * image per state.
+   */
+  async listProfileImages(): Promise<GalleryImage[]> {
+    return this.galleryRepo.find({
+      where: { isProfileImage: true, isActive: true },
+      order: { stateCode: 'ASC' },
+    });
+  }
 }

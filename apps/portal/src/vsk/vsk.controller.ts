@@ -22,10 +22,22 @@ import { VskProfileDto } from './dto/vsk-profile.dto';
 import { VskPmuDto } from './dto/vsk-pmu.dto';
 import { VskSoftwareDto } from './dto/vsk-software.dto';
 import { VskInfraDto } from './dto/vsk-infra.dto';
+import { VskOfficerHistory } from './entities/vsk-officer-history.entity';
+import { VskCommitteeMember } from './entities/vsk-committee-member.entity';
+import { FileStorageService } from '../storage/file-storage.service';
+import { VskPdfService } from './vsk-pdf.service';
+import { VskExportService, AdminStateRow } from './vsk-export.service';
+import { MasterDataService } from '../master-data/master-data.service';
 
 @Controller('vsk')
 export class VskController {
-  constructor(private readonly vskService: VskService) {}
+  constructor(
+    private readonly vskService: VskService,
+    private readonly fileStorage: FileStorageService,
+    private readonly pdfService: VskPdfService,
+    private readonly vskExport: VskExportService,
+    private readonly masterData: MasterDataService,
+  ) {}
 
   // ═══════════════════════════════════════════════════════════════
   // PROFILE
@@ -334,9 +346,36 @@ export class VskController {
     @Query('imageType') imageType: string,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    // TODO: Implement file storage (OCI Object Storage or local filesystem)
-    const imageUrl = `/uploads/vsk/${user.stateCode}/${imageType}_${Date.now()}.${file?.originalname?.split('.').pop() || 'jpg'}`;
-    return { imageUrl, imageType };
+    const stateCode = this.extractStateCode(user);
+    await this.enforceSubmissionLock(stateCode);
+
+    // Only allow the three known infra image slots.
+    const slot = ['room', 'screen', 'workstation'].includes((imageType || '').toLowerCase())
+      ? imageType.toLowerCase()
+      : 'misc';
+
+    const stored = await this.fileStorage.saveImage(file, ['vsk', stateCode, slot]);
+
+    // Persist the URL onto the infra record so it survives reloads and shows on
+    // the Review page / PDF without a separate save.
+    const field =
+      slot === 'room'
+        ? 'roomImageUrl'
+        : slot === 'screen'
+          ? 'screenImageUrl'
+          : slot === 'workstation'
+            ? 'workstationImageUrl'
+            : null;
+    if (field) {
+      await this.vskService.saveInfra(
+        stateCode,
+        { [field]: stored.url } as Partial<VskInfraDto> as VskInfraDto,
+        user.userId,
+        user.username,
+      );
+    }
+
+    return { imageUrl: stored.url, imageType: slot };
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -347,7 +386,11 @@ export class VskController {
   @Roles('State_Admin')
   async getReviewSummary(@CurrentUser() user: AuthenticatedUser) {
     const stateCode = this.extractStateCode(user);
-    const details = await this.vskService.getFullDetails(stateCode);
+    const [details, officers, committeeMembers] = await Promise.all([
+      this.vskService.getFullDetails(stateCode),
+      this.vskService.getActiveOfficers(stateCode),
+      this.vskService.getCommitteeMembers(stateCode),
+    ]);
 
     const profile = details.profile;
     const allStepsComplete =
@@ -358,8 +401,10 @@ export class VskController {
 
     return {
       profile: details.profile,
-      officers: [], // TODO: load from officers entity
-      committeeMembers: [], // TODO: load from committee entity
+      // Normalize isActive boolean → 1/0 so the frontend's `isActive === 1`
+      // filtering in Step5 matches reliably.
+      officers: officers.map((o) => this.mapOfficerForClient(o)),
+      committeeMembers: committeeMembers.map((m) => this.mapCommitteeForClient(m)),
       infra: details.infra,
       software: details.software,
       pmu: details.pmu,
@@ -373,12 +418,14 @@ export class VskController {
     @CurrentUser() user: AuthenticatedUser,
     @Res() res: Response,
   ) {
-    // TODO: Implement PDF generation
+    const stateCode = this.extractStateCode(user);
+    const { pdf, safeName } = await this.buildStatePdf(stateCode);
     res.set({
       'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename=vsk_review_${user.stateCode}.pdf`,
+      'Content-Disposition': `attachment; filename="VSK_Profile_${safeName}.pdf"`,
+      'Content-Length': String(pdf.length),
     });
-    res.send(Buffer.from('PDF generation not yet implemented'));
+    res.end(pdf);
   }
 
   @Post('submit')
@@ -394,6 +441,34 @@ export class VskController {
       user.username,
     );
     return { success: true, message: 'VSK profile submitted successfully' };
+  }
+
+  /**
+   * Re-open a submitted VSK profile for editing. Flips submissionStatus back to
+   * DRAFT so the State Admin can edit and re-submit. All step data and officer
+   * history are preserved (only the submission flag changes). Returns a 400 if
+   * the profile is not currently submitted.
+   */
+  @Post('reopen')
+  @Roles('State_Admin')
+  @HttpCode(200)
+  async reopenProfile(@CurrentUser() user: AuthenticatedUser) {
+    const stateCode = this.extractStateCode(user);
+    const profile = await this.vskService.getProfile(stateCode);
+    if (!profile || profile.submissionStatus !== 'SUBMITTED') {
+      throw new AppException(
+        'VSK profile is not submitted, so there is nothing to re-open.',
+        HttpStatus.BAD_REQUEST,
+        'NOT_SUBMITTED',
+      );
+    }
+    await this.vskService.saveProfile(
+      stateCode,
+      { submissionStatus: 'DRAFT' } as VskProfileDto,
+      user.userId,
+      user.username,
+    );
+    return { success: true, message: 'VSK profile re-opened for editing' };
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -413,20 +488,40 @@ export class VskController {
 
   @Get('admin/dashboard')
   @Roles('Super_Admin', 'RVSK_Admin')
-  async getAdminDashboard(@CurrentUser() user: AuthenticatedUser) {
-    // Return dashboard KPI data
-    // TODO: Implement actual aggregation queries
+  async getAdminDashboard() {
+    const [summaries, stateNameMap] = await Promise.all([
+      this.vskService.getStateProgressSummaries(),
+      this.masterData.getStateNameMap(),
+    ]);
+
+    // Total universe of states/UTs from master data (fallback to 36 if the
+    // view is unavailable in a given environment).
+    const totalStates = Object.keys(stateNameMap).length || 36;
+
+    const statesWithProfile = summaries.length;
+    const statesSubmitted = summaries.filter((s) => s.overallStatus === 'SUBMITTED').length;
+    const statesCompleted = summaries.filter((s) => s.overallStatus === 'COMPLETED').length;
+    const statesInProgress = summaries.filter((s) => s.overallStatus === 'IN_PROGRESS').length;
+    // "Pending" = states that have not started a profile at all.
+    const statesPending = Math.max(0, totalStates - statesWithProfile);
+
+    // Completion % = share of all states that have fully submitted.
+    const completionPercentage =
+      totalStates > 0 ? Math.round((statesSubmitted / totalStates) * 100) : 0;
+
     return {
-      totalStates: 36,
-      statesSubmitted: 0,
-      statesDraft: 0,
-      statesPending: 36,
-      completionPercentage: 0,
-      statesWithProfile: 0,
-      statesWithInfra: 0,
-      statesWithSoftware: 0,
-      statesWithPmu: 0,
-      statesWithOfficers: 0,
+      totalStates,
+      statesSubmitted,
+      statesCompleted,
+      statesInProgress,
+      statesDraft: statesInProgress,
+      statesPending,
+      completionPercentage,
+      statesWithProfile,
+      statesWithInfra: summaries.filter((s) => s.hasInfra).length,
+      statesWithSoftware: summaries.filter((s) => s.hasSoftware).length,
+      statesWithPmu: summaries.filter((s) => s.hasPmu).length,
+      statesWithOfficers: summaries.filter((s) => s.hasSecretary).length,
     };
   }
 
@@ -437,45 +532,74 @@ export class VskController {
     @Query('size') size?: string,
     @Query('search') search?: string,
     @Query('stateCode') stateCode?: string,
-    @Query('region') region?: string,
     @Query('status') status?: string,
-    @Query('fromDate') fromDate?: string,
-    @Query('toDate') toDate?: string,
   ) {
-    // TODO: Implement actual query with filters
-    return { content: [], totalElements: 0 };
+    const rows = await this.buildAdminStateRows({ search, stateCode, status });
+
+    const pageNum = Math.max(0, parseInt(page ?? '0', 10) || 0);
+    const sizeNum = Math.min(200, Math.max(1, parseInt(size ?? '20', 10) || 20));
+    const start = pageNum * sizeNum;
+    const content = rows.slice(start, start + sizeNum);
+
+    return { content, totalElements: rows.length };
+  }
+
+  /**
+   * Download a state's VSK Profile PDF (admin view). Same document the State
+   * Admin gets from the review page — reuses VskPdfService. Only meaningful for
+   * states that have submitted; the dashboard gates the button accordingly.
+   */
+  @Get('admin/states/:stateCode/pdf')
+  @Roles('Super_Admin', 'RVSK_Admin')
+  async downloadStatePdf(
+    @Param('stateCode') stateCode: string,
+    @Res() res: Response,
+  ) {
+    const { pdf, safeName } = await this.buildStatePdf(stateCode);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="VSK_Profile_${safeName}.pdf"`,
+      'Content-Length': String(pdf.length),
+    });
+    res.end(pdf);
   }
 
   @Get('admin/states/:stateCode')
   @Roles('Super_Admin', 'RVSK_Admin')
   async getAdminStateDetails(@Param('stateCode') stateCode: string) {
-    const details = await this.vskService.getFullDetails(stateCode);
+    const [details, officers, committeeMembers, stateName] = await Promise.all([
+      this.vskService.getFullDetails(stateCode),
+      this.vskService.getActiveOfficers(stateCode),
+      this.vskService.getCommitteeMembers(stateCode),
+      this.masterData.getStateNameByCode(stateCode),
+    ]);
     return {
       stateCode,
-      stateName: stateCode, // TODO: resolve from master data
+      stateName: stateName || stateCode,
       ...details,
-      officers: [],
-      committeeMembers: [],
+      officers: officers.map((o) => this.mapOfficerForClient(o)),
+      committeeMembers: committeeMembers.map((m) => this.mapCommitteeForClient(m)),
     };
   }
 
   @Get('admin/export')
   @Roles('Super_Admin', 'RVSK_Admin')
   async exportVskData(
-    @Query('format') format: string = 'xlsx',
+    @Res() res: Response,
     @Query('stateCode') stateCode?: string,
-    @Query('region') region?: string,
     @Query('status') status?: string,
-    @Res() res?: Response,
+    @Query('search') search?: string,
   ) {
-    // TODO: Implement actual export
-    const contentType = format === 'csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    const ext = format === 'csv' ? 'csv' : 'xlsx';
+    const rows = await this.buildAdminStateRows({ search, stateCode, status });
+    const buffer = await this.vskExport.buildStatesWorkbook(rows);
+
     res.set({
-      'Content-Type': contentType,
-      'Content-Disposition': `attachment; filename=vsk_export.${ext}`,
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': 'attachment; filename="vsk_data_export.xlsx"',
+      'Content-Length': String(buffer.length),
     });
-    res.send(Buffer.from('Export not yet implemented'));
+    res.end(buffer);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -491,6 +615,136 @@ export class VskController {
       );
     }
     return user.stateCode;
+  }
+
+  /**
+   * Build the VSK Profile PDF for a state (shared by the State review download
+   * and the admin dashboard download). Returns the buffer plus a filesystem-safe
+   * state name for the download filename.
+   */
+  private async buildStatePdf(stateCode: string): Promise<{ pdf: Buffer; safeName: string }> {
+    const [details, officers, committeeMembers, stateName] = await Promise.all([
+      this.vskService.getFullDetails(stateCode),
+      this.vskService.getActiveOfficers(stateCode),
+      this.vskService.getCommitteeMembers(stateCode),
+      this.masterData.getStateNameByCode(stateCode),
+    ]);
+
+    const pdf = await this.pdfService.generate({
+      stateCode,
+      stateName: stateName || stateCode,
+      profile: details.profile,
+      officers: officers.map((o) => ({
+        officerRole: o.officerRole,
+        name: o.name,
+        designation: o.designation,
+        phone: o.phone,
+        whatsapp: o.whatsapp,
+        email: o.email,
+      })),
+      committeeMembers: committeeMembers.map((m) => ({
+        name: m.name,
+        designation: m.designation,
+        phone: m.phone,
+        email: m.email,
+      })),
+      infra: details.infra,
+      software: details.software,
+      pmu: details.pmu,
+    });
+
+    const safeName = (stateName || stateCode).replace(/[^a-zA-Z0-9_-]+/g, '_');
+    return { pdf, safeName };
+  }
+
+  /**
+   * Map an officer entity to the client shape, normalizing the boolean
+   * `isActive` column to 1/0 so the frontend (which filters on `=== 1`) works.
+   */
+  private mapOfficerForClient(o: VskOfficerHistory) {
+    return {
+      id: o.id,
+      stateCode: o.stateCode,
+      officerRole: o.officerRole,
+      name: o.name,
+      designation: o.designation,
+      phone: o.phone,
+      whatsapp: o.whatsapp,
+      email: o.email,
+      startDate: o.startDate,
+      endDate: o.endDate,
+      isActive: o.isActive ? 1 : 0,
+    };
+  }
+
+  private mapCommitteeForClient(m: VskCommitteeMember) {
+    return {
+      id: m.id,
+      stateCode: m.stateCode,
+      name: m.name,
+      designation: m.designation,
+      phone: m.phone,
+      whatsapp: m.whatsapp,
+      email: m.email,
+      isActive: m.isActive ? 1 : 0,
+    };
+  }
+
+  /**
+   * Produce fully-labeled, filtered per-state rows for the admin dashboard
+   * table and the Excel export. Shared so both views stay in sync.
+   */
+  private async buildAdminStateRows(filters: {
+    search?: string;
+    stateCode?: string;
+    status?: string;
+  }): Promise<AdminStateRow[]> {
+    const [summaries, stateNameMap] = await Promise.all([
+      this.vskService.getStateProgressSummaries(),
+      this.masterData.getStateNameMap(),
+    ]);
+
+    let rows: AdminStateRow[] = summaries.map((s) => ({
+      stateCode: s.stateCode,
+      stateName: stateNameMap[s.stateCode.toUpperCase()] || s.stateCode,
+      step1Status: s.step1Status,
+      step2Status: s.step2Status,
+      step3Status: s.step3Status,
+      step4Status: s.step4Status,
+      submissionStatus: s.submissionStatus,
+      overallStatus: s.overallStatus,
+      completedSteps: s.completedSteps,
+      totalSteps: s.totalSteps,
+      // Legacy v1 fields the frontend table still reads.
+      hasProfile: s.hasProfile,
+      hasInfra: s.hasInfra,
+      hasSoftware: s.hasSoftware,
+      hasPmu: s.hasPmu,
+      hasSecretary: s.hasSecretary,
+      completedSections: s.completedSteps,
+      totalSections: s.totalSteps,
+      updatedAt: s.updatedAt ? s.updatedAt.toISOString() : undefined,
+    }));
+
+    if (filters.stateCode) {
+      const code = filters.stateCode.toUpperCase();
+      rows = rows.filter((r) => r.stateCode.toUpperCase() === code);
+    }
+    if (filters.status) {
+      const st = filters.status.toUpperCase();
+      rows = rows.filter((r) => r.overallStatus === st);
+    }
+    if (filters.search) {
+      const q = filters.search.trim().toLowerCase();
+      rows = rows.filter(
+        (r) =>
+          r.stateName.toLowerCase().includes(q) ||
+          r.stateCode.toLowerCase().includes(q),
+      );
+    }
+
+    rows.sort((a, b) => a.stateName.localeCompare(b.stateName));
+    return rows;
   }
 
   private async enforceSubmissionLock(stateCode: string): Promise<void> {
