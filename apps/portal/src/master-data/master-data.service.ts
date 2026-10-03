@@ -143,6 +143,39 @@ export class MasterDataService {
 
   // ==================== SINGLE-ROW LOOKUPS (validation + name snapshot) ====================
 
+  /**
+   * Resolve a state's display name from its 2-char business code (state_id),
+   * which is how VSK data is keyed. Returns null if not found.
+   */
+  async getStateNameByCode(stateCode: string): Promise<string | null> {
+    if (!stateCode || typeof stateCode !== 'string') return null;
+    const rows = await this.dataSource.query(
+      `SELECT state_name
+         FROM rvsk_portal.vw_state_master
+        WHERE UPPER(state_id) = UPPER($1)
+        LIMIT 1`,
+      [stateCode.trim()],
+    );
+    return rows.length ? rows[0].state_name : null;
+  }
+
+  /**
+   * Return a map of every state's 2-char code → display name. Used by the VSK
+   * admin dashboard to label rows without an N+1 lookup.
+   */
+  async getStateNameMap(): Promise<Record<string, string>> {
+    const rows = await this.dataSource.query(
+      `SELECT state_id, state_name
+         FROM rvsk_portal.vw_state_master
+        WHERE is_active = true AND state_id IS NOT NULL`,
+    );
+    const map: Record<string, string> = {};
+    for (const r of rows) {
+      map[String(r.state_id).toUpperCase()] = r.state_name;
+    }
+    return map;
+  }
+
   /** Returns the state row for a key, or null if it does not exist. */
   async findState(stateKey: string): Promise<StateRow | null> {
     if (!this.isValidKey(stateKey)) return null;

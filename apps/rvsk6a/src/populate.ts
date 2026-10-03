@@ -26,6 +26,9 @@ async function main() {
   const logger = new Logger('AttendancePopulateCLI');
   const dateArg = process.argv[2]; // optional YYYY-MM-DD
 
+  // Don't register the in-app nightly cron in this short-lived CLI process.
+  process.env.ATT_DISABLE_SCHEDULER = 'true';
+
   // Application context = full DI graph, no HTTP listener.
   const app = await NestFactory.createApplicationContext(AppModule, {
     logger: ['error', 'warn', 'log'],
@@ -34,7 +37,8 @@ async function main() {
     const populator = app.get(AttendancePopulatorService);
     const result = await populator.runNightly(dateArg);
     logger.log(
-      `Populate OK: date=${result.date} page1Nodes=${result.page1Nodes} seriesNodes=${result.seriesNodes}`,
+      `Populate OK: date=${result.date} page1Nodes=${result.page1Nodes} ` +
+        `seriesNodes=${result.seriesNodes} geoNodes=${result.geoNodes} breakdownNodes=${result.breakdownNodes}`,
     );
     await app.close();
     process.exit(0);

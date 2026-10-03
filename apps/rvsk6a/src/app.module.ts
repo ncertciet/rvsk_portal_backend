@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ScheduleModule } from '@nestjs/schedule';
 import { CommonModule, createOracleDataSource } from '@rvsk/common';
 
 import { AttendanceModule } from './attendance/attendance.module';
@@ -22,6 +23,7 @@ import { HealthController } from './health.controller';
         autoLoadEntities: true,
       }),
     }),
+    ScheduleModule.forRoot(),
     CommonModule,
     AttendanceModule,
     FiltersModule,

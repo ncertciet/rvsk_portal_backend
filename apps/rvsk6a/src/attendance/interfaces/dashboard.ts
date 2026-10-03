@@ -151,3 +151,50 @@ export interface TeacherSeriesBlob {
 export interface DimensionSeriesBlob {
   series: Record<string, DailyCountPoint[]>; // keyed by class no. / gender / category
 }
+
+
+// ── Page 1 — Geography (map + State/UT teacher bar), drill-aware ───────────────
+/**
+ * One child region of the current node (national→states, state→districts, …),
+ * carrying the metrics the map (student attendance %) and the State/UT teacher
+ * bar (teacher reported %) both read. `lat/lng` are the region centroid for the
+ * map bubble; present when resolvable from school coordinates.
+ */
+export interface GeoRegion {
+  level: 'state' | 'district' | 'block' | 'cluster' | 'school';
+  key: string;
+  name: string;
+  /** Student attendance % (present / (present+absent)) — map dot colour. */
+  studentAttendancePct: number;
+  /** Teacher reported % (teachers marked / teachers in region) — teacher bar. */
+  teacherReportedPct: number;
+  /** Centroid for the map (avg of child school lat/lng); null if unavailable. */
+  lat: number | null;
+  lng: number | null;
+}
+
+export interface GeoData {
+  /** The level of the returned children (what the UI is drilling INTO). */
+  childLevel: 'state' | 'district' | 'block' | 'cluster' | 'school';
+  regions: GeoRegion[];
+}
+
+
+// ── Page 1 — Student breakdown bars (class / gender / category snapshot) ───────
+/**
+ * One bar in a student-breakdown chart: a label + present/absent counts and the
+ * attendance %. The three breakdowns are INDEPENDENT datasets (gender and
+ * category are never linked/cross-multiplied; each is its own total).
+ */
+export interface StudentBreakdownBar {
+  label: string;
+  present: number;
+  absent: number;
+  pct: number;
+}
+
+export interface StudentBreakdownData {
+  byClass: StudentBreakdownBar[];    // Class 1..12
+  byGender: StudentBreakdownBar[];   // Male / Female / Others
+  byCategory: StudentBreakdownBar[]; // General / SC / ST / OBC
+}

@@ -36,6 +36,60 @@ export class CacheService {
     }
   }
 
+  /**
+   * Batch-write many key/value pairs in one pipeline round-trip (used by the
+   * attendance populator to write ~100k node blobs efficiently instead of one
+   * awaited SET per key). Chunked so a single pipeline isn't unbounded. Fails
+   * soft like the other methods.
+   */
+  async setMany(
+    entries: { key: string; value: any }[],
+    ttlSeconds?: number,
+    chunkSize = 1000,
+  ): Promise<void> {
+    try {
+      for (let i = 0; i < entries.length; i += chunkSize) {
+        const chunk = entries.slice(i, i + chunkSize);
+        const pipe = this.redisClient.pipeline();
+        for (const { key, value } of chunk) {
+          const serialized = JSON.stringify(value);
+          if (ttlSeconds) pipe.set(key, serialized, 'EX', ttlSeconds);
+          else pipe.set(key, serialized);
+        }
+        await pipe.exec();
+      }
+    } catch (error: any) {
+      this.logger.warn(`Redis pipeline SET failed (${entries.length} keys): ${error?.message || error}`);
+    }
+  }
+
+  /**
+   * Best-effort distributed lock (SET key token NX EX ttl). Returns true if this
+   * caller acquired the lock. Used to guard once-per-cluster jobs (e.g. the
+   * attendance nightly refresh) when the app runs multiple instances. On any
+   * Redis error returns false (do NOT run the guarded job if we can't be sure).
+   */
+  async acquireLock(key: string, token: string, ttlSeconds: number): Promise<boolean> {
+    try {
+      const res = await this.redisClient.set(key, token, 'EX', ttlSeconds, 'NX');
+      return res === 'OK';
+    } catch (error: any) {
+      this.logger.warn(`Redis lock acquire failed for "${key}": ${error?.message || error}`);
+      return false;
+    }
+  }
+
+  /** Release a lock only if we still own it (token matches), via a tiny Lua CAS. */
+  async releaseLock(key: string, token: string): Promise<void> {
+    try {
+      const lua =
+        'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end';
+      await this.redisClient.eval(lua, 1, key, token);
+    } catch (error: any) {
+      this.logger.warn(`Redis lock release failed for "${key}": ${error?.message || error}`);
+    }
+  }
+
   async del(key: string): Promise<void> {
     try {
       await this.redisClient.del(key);

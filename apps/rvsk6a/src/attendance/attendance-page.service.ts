@@ -30,40 +30,52 @@ export class AttendancePageService {
   ): Promise<SuccessEnvelope<AttendancePageData | null>> {
     const scope = resolveScope(user);
     const merged = applyScope(scope, filters);
-    const date = filters.date ?? this.q.todayISO();
+    const date = filters.date ?? (await this.q.latestDataDate());
     const node = resolveNode(merged);
 
-    // School selection → school hash field; otherwise the node snapshot.
-    const cached = merged.udiseCode
-      ? await this.q.get<AttendancePageData>(
-          // stored as a HASH; CacheService has no HGET, so schools are stored as
-          // discrete keys under the same date namespace for the API read path.
-          `${page1SchoolHashKey(date)}:${merged.udiseCode}`,
-        )
-      : await this.q.get<AttendancePageData>(page1Key(date, node as GeoNode));
-
-    if (cached) {
-      return ok(cached, {
-        asOfDate: cached.asOfDate ?? date,
-        scopeLevel: scope.level,
-        cached: true,
-      });
+    // ── School leaf (option b): on-demand from MV_ATT_SCHOOL_DAY + cache-through.
+    // This is the ONE allowed request-time ADW read, even under REDIS_ONLY — a
+    // single indexed row, not a dashboard scan (requirement A2/C7).
+    if (merged.udiseCode) {
+      const schoolKey = `${page1SchoolHashKey(date)}:${merged.udiseCode}`;
+      // bypass mode skips the Redis read (perf test); otherwise read-through.
+      if (!this.q.bypassRedis) {
+        const hit = await this.q.get<AttendancePageData>(schoolKey);
+        if (hit) {
+          return ok(hit, { asOfDate: hit.asOfDate ?? date, scopeLevel: scope.level, cached: true });
+        }
+      }
+      const computed = await this.computeSchoolFromMvs(date, merged.udiseCode, merged);
+      if (!computed) {
+        return ok(null, { asOfDate: date, scopeLevel: scope.level, cached: false, empty: true });
+      }
+      if (!this.q.bypassRedis) await this.q.set(schoolKey, computed); // cache-through
+      return ok(computed, { asOfDate: date, scopeLevel: scope.level, cached: false });
     }
 
-    // Miss.
-    if (this.q.redisOnly) {
-      return ok(null, { asOfDate: date, scopeLevel: scope.level, cached: false, empty: true });
+    // ── Geo node (national→cluster): read the pre-computed Redis blob.
+    // bypass mode skips the read and always computes from ADW (perf logging).
+    if (!this.q.bypassRedis) {
+      const cached = await this.q.get<AttendancePageData>(page1Key(date, node as GeoNode));
+      if (cached) {
+        return ok(cached, {
+          asOfDate: cached.asOfDate ?? date,
+          scopeLevel: scope.level,
+          cached: true,
+        });
+      }
+      // Miss on a geo node in Redis-only mode → empty (never hits ADW).
+      if (this.q.redisOnly) {
+        return ok(null, { asOfDate: date, scopeLevel: scope.level, cached: false, empty: true });
+      }
     }
 
-    // Dev fallback: compute live from the MVs.
-    const computed = await this.computeFromMvs(date, node, merged.udiseCode);
+    // false (hybrid, on miss) or bypass (always): compute live from the MVs.
+    const computed = await this.computeFromMvs(date, node, merged, merged.udiseCode);
     if (!computed) {
       return ok(null, { asOfDate: date, scopeLevel: scope.level, cached: false, empty: true });
     }
-    const keyToWarm = merged.udiseCode
-      ? `${page1SchoolHashKey(date)}:${merged.udiseCode}`
-      : page1Key(date, node as GeoNode);
-    await this.q.set(keyToWarm, computed);
+    if (!this.q.bypassRedis) await this.q.set(page1Key(date, node as GeoNode), computed);
     return ok(computed, { asOfDate: date, scopeLevel: scope.level, cached: false });
   }
 
@@ -75,6 +87,7 @@ export class AttendancePageService {
   private async computeFromMvs(
     date: string,
     node: ReturnType<typeof resolveNode>,
+    merged: { stateKey?: string },
     udiseCode?: string,
   ): Promise<AttendancePageData | null> {
     if (udiseCode) {
@@ -125,9 +138,9 @@ export class AttendancePageService {
       FROM ${this.q.schema}.MV_ATT_GEO_DAY g
       WHERE g.ATTENDANCE_DATE = TO_DATE(:1,'YYYY-MM-DD') ${attWhere.frag}`;
 
-    // UDISE 25-26 static reference — national row (STATE_KEY NULL) or per-state;
-    // null below State.
-    const udiseRefPromise = this.loadUdiseRef(node);
+    // UDISE 25-26 static reference — national row, or the containing STATE's row
+    // (sticks for district/block/cluster; requirement C3).
+    const udiseRefPromise = this.loadUdiseRef(node, merged);
 
     const [attRows, censusRows, covExpRows, covRepRows, udiseRef] = await Promise.all([
       this.q.query(attSql, [date, ...attWhere.binds]),
@@ -201,6 +214,102 @@ export class AttendancePageService {
   }
 
   /**
+   * School-leaf Page 1 (option b, requirement C7): one indexed row from
+   * MV_ATT_SCHOOL_DAY joined to MV_GEO_SCHOOL_DIM. Allowed at request time even
+   * under REDIS_ONLY (single row, not a scan); result is cache-through'd.
+   */
+  private async computeSchoolFromMvs(
+    date: string,
+    udiseCode: string,
+    merged: { stateKey?: string },
+  ): Promise<AttendancePageData | null> {
+    const sql = `
+      SELECT
+        TO_CHAR(sd.STATE_KEY)    AS "stateKey",
+        NVL(sd.TOTAL_STUDENTS,0) AS "rvskStudents",
+        NVL(sd.TOTAL_TEACHERS,0) AS "rvskTeachers",
+        NVL(f.STU_PRESENT,0)    AS "stuPresent",
+        NVL(f.STU_ABSENT,0)     AS "stuAbsent",
+        NVL(f.TCH_MARKED,0)     AS "tchMarked",
+        NVL(f.TCH_PRESENT,0)    AS "tchPresent",
+        NVL(f.TCH_ABSENT,0)     AS "tchAbsent",
+        NVL(f.TCH_ON_DUTY,0)    AS "tchOnDuty",
+        NVL(f.STU_REPORTED,0)   AS "stuReported",
+        NVL(f.TCH_REPORTED,0)   AS "tchReported"
+      FROM ${this.q.schema}.MV_GEO_SCHOOL_DIM sd
+      LEFT JOIN ${this.q.schema}.MV_ATT_SCHOOL_DAY f
+        ON f.UDISE_CODE = sd.UDISE_CODE AND f.ATTENDANCE_DATE = TO_DATE(:1,'YYYY-MM-DD')
+      WHERE sd.UDISE_CODE = :2`;
+    const rows = await this.q.query(sql, [date, udiseCode]);
+    const r = rows[0];
+    if (!r) return null; // unknown/inactive school → meta.empty
+
+    const num = (v: any) => Number(v ?? 0);
+    const pct = (n: number, d: number) => (d > 0 ? Math.round((n * 10000) / d) / 100 : 0);
+
+    const stuPresent = num(r.stuPresent);
+    const stuAbsent = num(r.stuAbsent);
+    const stuMarked = stuPresent + stuAbsent;
+    const tchMarked = num(r.tchMarked);
+    const tchPresent = num(r.tchPresent);
+    const tchAbsent = num(r.tchAbsent);
+    const tchOnDuty = num(r.tchOnDuty);
+    const rvskStudents = num(r.rvskStudents);
+    const rvskTeachers = num(r.rvskTeachers);
+    const stuReported = num(r.stuReported) > 0 ? 1 : 0;
+    const tchReported = num(r.tchReported) > 0 ? 1 : 0;
+
+    // UDISE 25-26 sticks to the school's parent state (requirement C3/C7).
+    const stateKey = merged.stateKey ?? (r.stateKey != null ? String(r.stateKey) : undefined);
+    const udiseRef = stateKey
+      ? await this.fetchUdiseRow('u.STATE_KEY = :1', [stateKey])
+      : null;
+
+    return {
+      asOfDate: date,
+      scopeLevel: 'district', // deepest; school rolls up under district scope
+      // Coverage is a "how many geos reported" metric — not meaningful for a
+      // single school, so zeroed at the leaf.
+      integrationCoverage: {
+        states: { reported: 0, expected: 0 },
+        districts: { reported: 0, expected: 0 },
+        blocks: { reported: 0, expected: 0 },
+      },
+      integrationStatus: {
+        udiseRef,
+        rvskMaster: { schools: 1, teachers: rvskTeachers, students: rvskStudents },
+        onboarded: { schools: 1, teachers: rvskTeachers, students: rvskStudents },
+        yetToOnboard: { schools: 0, teachers: 0, students: 0 },
+      },
+      schoolIntegration: {
+        onboarded: 1,
+        reportingTeacher: tchReported,
+        reportingStudent: stuReported,
+      },
+      teacher: {
+        totalInSchools: rvskTeachers,
+        totalReported: tchMarked,
+        reportedPct: pct(tchMarked, rvskTeachers),
+        present: tchPresent,
+        absent: tchAbsent,
+        onDuty: tchOnDuty,
+        presentPct: pct(tchPresent, tchMarked),
+        absentPct: pct(tchAbsent, tchMarked),
+        onDutyPct: pct(tchOnDuty, tchMarked),
+      },
+      student: {
+        totalInSchools: rvskStudents,
+        totalReported: stuMarked,
+        reportedPct: pct(stuReported, 1), // 100% if this school reported, else 0
+        present: stuPresent,
+        absent: stuAbsent,
+        presentPct: pct(stuPresent, stuMarked),
+        absentPct: pct(stuAbsent, stuMarked),
+      },
+    };
+  }
+
+  /**
    * Positional WHERE fragment + binds for the resolved node, for table alias
    * `alias`, with the first bind at position `bindStart`.
    */
@@ -223,17 +332,30 @@ export class AttendancePageService {
   }
 
   /**
-   * UDISE 25-26 static reference for the node: national row (STATE_KEY NULL) for
-   * the national node, the per-state row for a state node, null below State.
+   * UDISE 25-26 static reference (requirement C3). UDISE data exists only at
+   * NATIONAL and STATE grain and cannot drill below State, so:
+   *   - national node        → the All-India row (STATE_KEY NULL)
+   *   - state node           → that state's row
+   *   - district/block/cluster → the CONTAINING STATE's row (sticks, not null)
+   * The containing state is taken from the request filters when present, else
+   * resolved from the node's own key via MV_GEO_SCHOOL_DIM.
    */
-  private async loadUdiseRef(node: ReturnType<typeof resolveNode>): Promise<UdiseRef | null> {
-    if (node.level !== 'national' && node.level !== 'state') return null;
+  private async loadUdiseRef(
+    node: ReturnType<typeof resolveNode>,
+    merged: { stateKey?: string },
+  ): Promise<UdiseRef | null> {
+    if (node.level === 'national') {
+      return this.fetchUdiseRow('u.STATE_KEY IS NULL', []);
+    }
 
-    const where =
-      node.level === 'national'
-        ? 'u.STATE_KEY IS NULL'
-        : 'u.STATE_KEY = :1';
-    const binds = node.level === 'national' ? [] : [node.key];
+    // Resolve the containing state key for any state-or-below node.
+    const stateKey = await this.resolveStateKey(node, merged);
+    if (!stateKey) return null;
+    return this.fetchUdiseRow('u.STATE_KEY = :1', [stateKey]);
+  }
+
+  /** Fetch one UDISE_STATIC row for the given WHERE fragment. */
+  private async fetchUdiseRow(where: string, binds: any[]): Promise<UdiseRef | null> {
     const sql = `
       SELECT u.GRAIN "grain", u.TOTAL_SCHOOLS "sc", u.TOTAL_TEACHERS "tch", u.TOTAL_STUDENTS "stu"
       FROM ${this.q.schema}.VW_UDISE_STATIC_DATA u
@@ -247,5 +369,35 @@ export class AttendancePageService {
       teachers: Number(r.tch ?? 0),
       students: Number(r.stu ?? 0),
     };
+  }
+
+  /**
+   * The containing STATE_KEY for a state-or-below node. Prefer the request's
+   * stateKey (always present when the cascade is used); otherwise look it up
+   * from the deepest node key via MV_GEO_SCHOOL_DIM (handles deep-links that
+   * supply only a block/district key).
+   */
+  private async resolveStateKey(
+    node: ReturnType<typeof resolveNode>,
+    merged: { stateKey?: string },
+  ): Promise<string | null> {
+    if (node.level === 'state') return node.key ?? null;
+    if (merged.stateKey) return merged.stateKey;
+    if (!node.key) return null;
+
+    const col: Record<string, string> = {
+      district: 'DISTRICT_KEY',
+      block: 'BLOCK_KEY',
+      cluster: 'CLUSTER_KEY',
+    };
+    const keyCol = col[node.level];
+    if (!keyCol) return null;
+    const rows = await this.q.query(
+      `SELECT TO_CHAR(MAX(STATE_KEY)) AS "sk"
+       FROM ${this.q.schema}.MV_GEO_SCHOOL_DIM
+       WHERE ${keyCol} = :1`,
+      [node.key],
+    );
+    return rows[0]?.sk ?? null;
   }
 }

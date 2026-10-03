@@ -11,6 +11,10 @@ import { VskOfficerHistory } from './entities/vsk-officer-history.entity';
 import { VskCommitteeMember } from './entities/vsk-committee-member.entity';
 import { VskService } from './vsk.service';
 import { VskController } from './vsk.controller';
+import { VskPdfService } from './vsk-pdf.service';
+import { VskExportService } from './vsk-export.service';
+import { StorageModule } from '../storage/storage.module';
+import { MasterDataModule } from '../master-data/master-data.module';
 
 @Module({
   imports: [
@@ -24,9 +28,11 @@ import { VskController } from './vsk.controller';
       VskOfficerHistory,
       VskCommitteeMember,
     ]),
+    StorageModule,
+    MasterDataModule,
   ],
   controllers: [VskController],
-  providers: [VskService],
+  providers: [VskService, VskPdfService, VskExportService],
   exports: [VskService],
 })
 export class VskModule {}

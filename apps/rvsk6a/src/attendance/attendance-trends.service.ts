@@ -46,11 +46,35 @@ export class AttendanceTrendsService {
     const merged = applyScope(scope, dto);
     const node = resolveNode(merged);
 
-    const { from, to } = this.resolveWindow(dto);
+    // Trends end at the latest date WITH data (requirement B2), not today.
+    const anchor = await this.q.latestDataDate();
+    const { from, to } = this.resolveWindow(dto, anchor);
     const spanDays = Math.round((this.parse(to) - this.parse(from)) / DAY_MS);
     const granularity: TrendGranularity = spanDays > 45 ? 'weekly' : 'daily';
     const dimension = dto.dimension ?? 'overall';
     const rangeLabel = dto.range ?? `${from}..${to}`;
+
+    // ── School leaf (option b): that school's OWN windowed trend, computed
+    // on-demand (allowed under REDIS_ONLY) + cache-through. (requirement F4) ────
+    if (merged.udiseCode) {
+      const key = `att:v1:trend:school:${merged.udiseCode}:${from}:${to}:${dimension}`;
+      if (!this.q.bypassRedis) {
+        const hit = await this.q.get<TrendData>(key);
+        if (hit) return ok(hit, { scopeLevel: scope.level, cached: true, asOfDate: to });
+      }
+      const data = await this.computeSchoolTrend(
+        merged.udiseCode, from, to, dimension, granularity, rangeLabel,
+      );
+      if (!data) return ok(null, { scopeLevel: scope.level, cached: false, empty: true });
+      if (!this.q.bypassRedis) await this.q.set(key, data);
+      return ok(data, { scopeLevel: scope.level, cached: false, asOfDate: to });
+    }
+
+    // bypass mode: skip Redis entirely and compute the geo series from MVs.
+    if (this.q.bypassRedis) {
+      const computed = await this.computeFromMvs(node, from, to, dimension, granularity, rangeLabel);
+      return ok(computed, { scopeLevel: scope.level, cached: false, ...(computed ? {} : { empty: true }) });
+    }
 
     // Always need overall (reported card + overall present) + teacher.
     const overallBlob = await this.q.get<StudentOverallSeriesBlob>(
@@ -85,26 +109,28 @@ export class AttendanceTrendsService {
   }
 
   // ── Window resolution + 6-month clamp ─────────────────────────────────────────
-  private resolveWindow(dto: AttendanceTrendDto): { from: string; to: string } {
-    const today = new Date();
+  // `anchorISO` is the latest date WITH data; the window ends there (not today),
+  // and presets count back from it (requirement B2).
+  private resolveWindow(dto: AttendanceTrendDto, anchorISO: string): { from: string; to: string } {
     const toISO = (d: Date) => d.toISOString().slice(0, 10);
-    const minAllowed = new Date();
+    const anchor = new Date(anchorISO);
+    const minAllowed = new Date(anchor);
     minAllowed.setMonth(minAllowed.getMonth() - this.q.seriesMonths);
 
     // Preset ranges win when no explicit custom range is given.
     if (dto.range && !(dto.fromDate && dto.toDate)) {
-      const from = new Date();
+      const from = new Date(anchor);
       if (dto.range === '30D') from.setDate(from.getDate() - 30);
       else if (dto.range === '3M') from.setMonth(from.getMonth() - 3);
       else if (dto.range === '6M') from.setMonth(from.getMonth() - 6);
-      return { from: toISO(from), to: toISO(today) };
+      return { from: toISO(from), to: anchorISO };
     }
 
-    // Custom range — clamp both ends into [minAllowed, today].
+    // Custom range — clamp both ends into [minAllowed, anchor].
     let from = dto.fromDate ? new Date(dto.fromDate) : new Date(minAllowed);
-    let to = dto.toDate ? new Date(dto.toDate) : new Date(today);
+    let to = dto.toDate ? new Date(dto.toDate) : new Date(anchor);
     if (from < minAllowed) from = new Date(minAllowed);
-    if (to > today) to = new Date(today);
+    if (to > anchor) to = new Date(anchor);
     if (from > to) from = new Date(to);
     return { from: toISO(from), to: toISO(to) };
   }
@@ -376,5 +402,101 @@ export class AttendanceTrendsService {
     };
     if (node.level === 'national') return { frag: '', binds: [] };
     return { frag: `AND ${alias}.${col[node.level]} = :${bindStart}`, binds: [node.key] };
+  }
+
+  // ── School-leaf windowed trend (requirement F4) ──────────────────────────────
+  // That school's OWN attendance over the window. Overall/gender/category/teacher
+  // from MV_ATT_SCHOOL_DAY (indexed on UDISE+DATE); class from the raw V2 view by
+  // GRADE. Card 1 "reported" at school = the school's own present % (teacher &
+  // student) — not a coverage ratio (per product owner: show the school's real
+  // attendance trend). Bucketed daily (≤45d) or weekly (ISO week).
+  private async computeSchoolTrend(
+    udiseCode: string,
+    from: string,
+    to: string,
+    dimension: string,
+    granularity: TrendGranularity,
+    rangeLabel: string,
+  ): Promise<TrendData | null> {
+    // Overall + gender + category + teacher, one row per day for this school.
+    const sql = `
+      SELECT TO_CHAR(ATTENDANCE_DATE,'YYYY-MM-DD') AS "d",
+             NVL(STU_PRESENT,0) AS "sp", NVL(STU_ABSENT,0) AS "sa",
+             NVL(TCH_PRESENT,0) AS "tp", NVL(TCH_MARKED,0) AS "tm",
+             NVL(MALE_PRESENT,0) "mp", NVL(MALE_ABSENT,0) "ma",
+             NVL(FEMALE_PRESENT,0) "fp", NVL(FEMALE_ABSENT,0) "fa",
+             NVL(OTHERS_PRESENT,0) "op", NVL(OTHERS_ABSENT,0) "oa",
+             NVL(GENERAL_PRESENT,0) "gp", NVL(GENERAL_ABSENT,0) "ga",
+             NVL(SC_PRESENT,0) "scp", NVL(SC_ABSENT,0) "sca",
+             NVL(ST_PRESENT,0) "stp", NVL(ST_ABSENT,0) "sta",
+             NVL(OBC_PRESENT,0) "obp", NVL(OBC_ABSENT,0) "oba"
+      FROM ${this.q.schema}.MV_ATT_SCHOOL_DAY
+      WHERE UDISE_CODE = :1
+        AND ATTENDANCE_DATE BETWEEN TO_DATE(:2,'YYYY-MM-DD') AND TO_DATE(:3,'YYYY-MM-DD')
+      ORDER BY ATTENDANCE_DATE`;
+    const rows = await this.q.query(sql, [udiseCode, from, to]);
+    if (!rows.length && dimension !== 'class') return null;
+
+    const stu: DailyCountPoint[] = rows.map((r: any) => ({ d: r.d, present: Number(r.sp), absent: Number(r.sa) }));
+    const tch: DailyCountPoint[] = rows.map((r: any) => ({
+      d: r.d, present: Number(r.tp), absent: Math.max(0, Number(r.tm) - Number(r.tp)),
+    }));
+
+    // Card 1 (reported) at school = the school's own present % (teacher/student).
+    const overallPts = this.bucketOverall(stu, tch, granularity);
+    const reported: ReportedPoint[] = overallPts.map((p) => ({
+      period: p.period, teacher: p.teacher, student: p.student,
+    }));
+
+    const present: TrendData['present'] = { overall: overallPts };
+
+    if (dimension === 'gender') {
+      present.byGender = {
+        male: this.bucketValue(rows.map((r: any) => ({ d: r.d, present: Number(r.mp), absent: Number(r.ma) })), granularity),
+        female: this.bucketValue(rows.map((r: any) => ({ d: r.d, present: Number(r.fp), absent: Number(r.fa) })), granularity),
+        others: this.bucketValue(rows.map((r: any) => ({ d: r.d, present: Number(r.op), absent: Number(r.oa) })), granularity),
+      } as any;
+    } else if (dimension === 'category') {
+      present.byCategory = {
+        general: this.bucketValue(rows.map((r: any) => ({ d: r.d, present: Number(r.gp), absent: Number(r.ga) })), granularity),
+        sc: this.bucketValue(rows.map((r: any) => ({ d: r.d, present: Number(r.scp), absent: Number(r.sca) })), granularity),
+        st: this.bucketValue(rows.map((r: any) => ({ d: r.d, present: Number(r.stp), absent: Number(r.sta) })), granularity),
+        obc: this.bucketValue(rows.map((r: any) => ({ d: r.d, present: Number(r.obp), absent: Number(r.oba) })), granularity),
+      } as any;
+    } else if (dimension === 'class') {
+      present.byClass = await this.computeSchoolClassTrend(udiseCode, from, to, granularity);
+    }
+
+    return { granularity, range: rangeLabel, reported, present };
+  }
+
+  /** Per-class windowed series for a school, from the raw V2 view by GRADE. */
+  private async computeSchoolClassTrend(
+    udiseCode: string,
+    from: string,
+    to: string,
+    granularity: TrendGranularity,
+  ): Promise<Record<string, ValuePoint[]>> {
+    const sql = `
+      SELECT TO_CHAR(ATTENDANCE_DATE,'YYYY-MM-DD') AS "d",
+             GRADE AS "grade",
+             NVL(SUM(NVL(MALE_PRESENT,0)+NVL(FEMALE_PRESENT,0)+NVL(TRANSGENDER_PRESENT,0)),0) AS "p",
+             NVL(SUM(NVL(MALE_ABSENT,0) +NVL(FEMALE_ABSENT,0) +NVL(TRANSGENDER_ABSENT,0)),0)  AS "a"
+      FROM ${this.q.schema}.VW_STUDENT_ATTENDANCE_V2
+      WHERE UDISE_CODE = :1
+        AND ATTENDANCE_DATE BETWEEN TO_DATE(:2,'YYYY-MM-DD') AND TO_DATE(:3,'YYYY-MM-DD')
+      GROUP BY ATTENDANCE_DATE, GRADE
+      ORDER BY ATTENDANCE_DATE`;
+    const rows = await this.q.query(sql, [udiseCode, from, to]);
+    const byGrade = new Map<string, DailyCountPoint[]>();
+    for (const r of rows as any[]) {
+      const g = String(Number(r.grade));
+      const arr = byGrade.get(g) ?? [];
+      arr.push({ d: r.d, present: Number(r.p), absent: Number(r.a) });
+      byGrade.set(g, arr);
+    }
+    const out: Record<string, ValuePoint[]> = {};
+    for (const [g, daily] of byGrade) out[g] = this.bucketValue(daily, granularity);
+    return out;
   }
 }

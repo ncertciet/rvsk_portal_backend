@@ -18,6 +18,26 @@ import { VskSoftwareDto, SoftwareItemDto } from './dto/vsk-software.dto';
 import { VskInfraDto } from './dto/vsk-infra.dto';
 import { AuditService } from '../audit/audit.service';
 
+export type StateOverallStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'SUBMITTED';
+
+export interface StateProgressRow {
+  stateCode: string;
+  step1Status: string;
+  step2Status: string;
+  step3Status: string;
+  step4Status: string;
+  submissionStatus: string;
+  completedSteps: number;
+  totalSteps: number;
+  overallStatus: StateOverallStatus;
+  hasProfile: boolean;
+  hasInfra: boolean;
+  hasSoftware: boolean;
+  hasPmu: boolean;
+  hasSecretary: boolean;
+  updatedAt?: Date;
+}
+
 @Injectable()
 export class VskService {
   constructor(
@@ -225,8 +245,8 @@ export class VskService {
     });
 
     if (header) {
-      // Update existing
-      header.starterPack = dto.starterPack ?? header.starterPack;
+      // Update existing (dto.starterPack is coerced to boolean by the DTO transform)
+      header.starterPack = dto.starterPack != null ? Boolean(dto.starterPack) : header.starterPack;
       header.serverType = dto.serverType ?? header.serverType;
       header.updatedBy = userId ?? header.updatedBy;
 
@@ -251,7 +271,7 @@ export class VskService {
       header = this.softwareHeaderRepo.create({
         id: headerId,
         stateCode,
-        starterPack: dto.starterPack ?? false,
+        starterPack: dto.starterPack != null ? Boolean(dto.starterPack) : false,
         serverType: dto.serverType,
         createdBy: userId,
         items: (dto.items || []).map((itemDto) =>
@@ -530,6 +550,70 @@ export class VskService {
   }
 
   // ═══════════════════════════════════════════════════════════════
+  // ADMIN AGGREGATION (dashboard / states list / export)
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Build a per-state progress summary across every state that has started a
+   * VSK profile. Returns one row per state_code present in vsk_profile, with
+   * section-completion flags and an overall status derived from step statuses.
+   */
+  async getStateProgressSummaries(): Promise<StateProgressRow[]> {
+    const profiles = await this.profileRepo.find();
+    if (!profiles.length) return [];
+
+    const stateCodes = profiles.map((p) => p.stateCode);
+
+    // Which states have a non-empty section row (presence = "has data").
+    const [infraCodes, softwareCodes, pmuCodes, officerRows] = await Promise.all([
+      this.infraRepo.find({ select: ['stateCode'] }),
+      this.softwareHeaderRepo.find({ select: ['stateCode'] }),
+      this.pmuHeaderRepo.find({ select: ['stateCode'] }),
+      this.officerRepo.find({ where: { isActive: true }, select: ['stateCode', 'officerRole'] }),
+    ]);
+
+    const infraSet = new Set(infraCodes.map((r) => r.stateCode));
+    const softwareSet = new Set(softwareCodes.map((r) => r.stateCode));
+    const pmuSet = new Set(pmuCodes.map((r) => r.stateCode));
+    const secretarySet = new Set(
+      officerRows.filter((r) => r.officerRole === 'SECRETARY').map((r) => r.stateCode),
+    );
+
+    return profiles.map((p) => {
+      const steps = [p.step1Status, p.step2Status, p.step3Status, p.step4Status];
+      const completedSteps = steps.filter((s) => s === 'COMPLETE').length;
+      const submitted = p.submissionStatus === 'SUBMITTED';
+      const anyProgress = completedSteps > 0 || steps.some((s) => s === 'DRAFT');
+
+      const overallStatus: StateOverallStatus = submitted
+        ? 'SUBMITTED'
+        : completedSteps === 4
+          ? 'COMPLETED'
+          : anyProgress
+            ? 'IN_PROGRESS'
+            : 'NOT_STARTED';
+
+      return {
+        stateCode: p.stateCode,
+        step1Status: p.step1Status || 'PENDING',
+        step2Status: p.step2Status || 'PENDING',
+        step3Status: p.step3Status || 'PENDING',
+        step4Status: p.step4Status || 'PENDING',
+        submissionStatus: p.submissionStatus || 'DRAFT',
+        completedSteps,
+        totalSteps: 4,
+        overallStatus,
+        hasProfile: true,
+        hasInfra: infraSet.has(p.stateCode),
+        hasSoftware: softwareSet.has(p.stateCode),
+        hasPmu: pmuSet.has(p.stateCode),
+        hasSecretary: secretarySet.has(p.stateCode),
+        updatedAt: p.updatedAt,
+      };
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
   // PRIVATE MAPPERS
   // ═══════════════════════════════════════════════════════════════
 
@@ -582,7 +666,9 @@ export class VskService {
     return {
       id: entity.id,
       stateCode: entity.stateCode,
-      starterPack: entity.starterPack,
+      // Emit as 1/0 so the frontend's `starterPack === 1` read-back works
+      // consistently. Input is coerced to boolean by the DTO transform.
+      starterPack: entity.starterPack ? 1 : 0,
       serverType: entity.serverType,
       items,
     };

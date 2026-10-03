@@ -3,7 +3,10 @@ import { AttendanceController } from './attendance.controller';
 import { AttendanceQueryService } from './attendance-query.service';
 import { AttendancePageService } from './attendance-page.service';
 import { AttendanceTrendsService } from './attendance-trends.service';
+import { AttendanceGeoService } from './attendance-geo.service';
+import { AttendanceStudentService } from './attendance-student.service';
 import { AttendancePopulatorService } from './attendance-populator.service';
+import { AttendanceSchedulerService } from './attendance-scheduler.service';
 
 /**
  * Attendance dashboard module (Pages 1 & 2). CacheService (Redis) and the Oracle
@@ -19,7 +22,10 @@ import { AttendancePopulatorService } from './attendance-populator.service';
     AttendanceQueryService,
     AttendancePageService,
     AttendanceTrendsService,
+    AttendanceGeoService,
+    AttendanceStudentService,
     AttendancePopulatorService,
+    AttendanceSchedulerService,
   ],
   exports: [AttendanceQueryService, AttendancePopulatorService],
 })

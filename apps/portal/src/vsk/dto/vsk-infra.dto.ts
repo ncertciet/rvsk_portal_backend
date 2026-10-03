@@ -1,4 +1,12 @@
-import { IsOptional, IsString, IsNumber, MaxLength } from 'class-validator';
+import { IsOptional, IsString, IsNumber, MaxLength, ValidateIf } from 'class-validator';
+
+/**
+ * Skip validation when the value is null OR undefined. The wizard sends `null`
+ * for cleared numeric fields, and plain @IsOptional()/@IsNumber() combinations
+ * have rejected `null` in some class-validator versions — ValidateIf makes the
+ * "optional, nullable" intent explicit and version-proof.
+ */
+const Nullable = () => ValidateIf((_obj, value) => value !== null && value !== undefined);
 
 export class VskInfraDto {
   @IsOptional()
@@ -10,42 +18,42 @@ export class VskInfraDto {
   @MaxLength(2)
   stateCode?: string;
 
-  @IsOptional()
+  @Nullable()
   @IsNumber()
-  roomLength?: number;
+  roomLength?: number | null;
 
-  @IsOptional()
+  @Nullable()
   @IsNumber()
-  roomWidth?: number;
+  roomWidth?: number | null;
 
-  @IsOptional()
+  @Nullable()
   @IsNumber()
-  roomHeight?: number;
+  roomHeight?: number | null;
 
-  @IsOptional()
+  @Nullable()
   @IsString()
   @MaxLength(500)
-  roomImageUrl?: string;
+  roomImageUrl?: string | null;
 
-  @IsOptional()
+  @Nullable()
   @IsNumber()
-  screenLength?: number;
+  screenLength?: number | null;
 
-  @IsOptional()
+  @Nullable()
   @IsNumber()
-  screenHeight?: number;
+  screenHeight?: number | null;
 
-  @IsOptional()
+  @Nullable()
   @IsString()
   @MaxLength(500)
-  screenImageUrl?: string;
+  screenImageUrl?: string | null;
 
-  @IsOptional()
+  @Nullable()
   @IsNumber()
-  workstationCount?: number;
+  workstationCount?: number | null;
 
-  @IsOptional()
+  @Nullable()
   @IsString()
   @MaxLength(500)
-  workstationImageUrl?: string;
+  workstationImageUrl?: string | null;
 }
