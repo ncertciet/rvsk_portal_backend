@@ -20,6 +20,7 @@ import {
   Roles,
   AuthenticatedUser,
   AppException,
+  ResponseFieldPolicies,
 } from '@rvsk/common';
 import { GrievanceService } from './grievance.service';
 import { GrievanceCategoryService } from '../categories/category.service';
@@ -133,6 +134,10 @@ export class GrievanceController {
    * GET /api/v1/grievances/:id — Get grievance detail with responses and history.
    */
   @Get(':id')
+  @ResponseFieldPolicies({
+    path: 'history.*.comment',
+    roles: ['State_Admin', 'RVSK_SPOC'],
+  })
   async getGrievanceDetail(
     @Param('id') id: string,
     @CurrentUser() user: AuthenticatedUser,

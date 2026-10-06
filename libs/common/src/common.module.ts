@@ -14,7 +14,7 @@ import { JwtStrategy } from './security';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { PageAccessGuard } from './guards/page-access.guard';
-import { LoggingInterceptor } from './interceptors';
+import { LoggingInterceptor, ResponseFieldPolicyInterceptor } from './interceptors';
 import { CorrelationIdMiddleware } from './middleware';
 import { RedisModule } from './redis';
 
@@ -48,6 +48,7 @@ import { RedisModule } from './redis';
     { provide: APP_GUARD, useClass: RolesGuard },
     { provide: APP_GUARD, useClass: PageAccessGuard },
     { provide: APP_INTERCEPTOR, useClass: LoggingInterceptor },
+    { provide: APP_INTERCEPTOR, useClass: ResponseFieldPolicyInterceptor },
   ],
   exports: [
     JwtModule,
